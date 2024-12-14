@@ -590,7 +590,7 @@ def fetch_categories_costs(access_token: str) -> Dict[str, float]:
         params = {
             "limit": limit,
             "offset": offset,
-            "groupBy": "product"  # Группируем по товарам
+            "groupBy": "product"
         }
         
         try:
@@ -618,7 +618,7 @@ def fetch_categories_costs(access_token: str) -> Dict[str, float]:
                 # Добавляем стоимость в соответствующую категорию
                 categories_total[category_name] += total_cost
                     
-                # Добавляем в общую сумму
+                # Добавляе�� в общую сумму
                 categories_total["Всего"] += total_cost
             
             if len(rows) < limit:
@@ -632,3 +632,140 @@ def fetch_categories_costs(access_token: str) -> Dict[str, float]:
     
     print(f"Found categories with total costs: {categories_total}")
     return categories_total
+
+def fetch_purchase_orders_in_transit_today(access_token: str) -> List[Dict]:
+    """
+    Fetches all purchase orders with status "В пути" for the current date.
+
+    Args:
+        access_token (str): MoySklad API access token.
+
+    Returns:
+        List[Dict]: List of purchase orders.
+    """
+    url = "https://api.moysklad.ru/api/remap/1.2/entity/purchaseorder"
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Accept-Encoding": "gzip"
+    }
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    params = {
+        "filter": f"state.name=В пути;moment>={today} 00:00:00;moment<={today} 23:59:59",
+        "expand": "positions",
+        "limit": 1000
+    }
+
+    purchase_orders = []
+    offset = 0
+
+    while True:
+        params['offset'] = offset
+        try:
+            response = requests.get(url, headers=headers, params=params)
+            response.raise_for_status()
+            data = response.json()
+            rows = data.get("rows", [])
+
+            if not rows:
+                break
+
+            purchase_orders.extend(rows)
+
+            if len(rows) < params["limit"]:
+                break
+
+            offset += params["limit"]
+        except requests.HTTPError as e:
+            print_api_errors(e.response)
+            raise e
+
+    return purchase_orders
+
+
+# services/moysklad_api.py (continued)
+
+def calculate_total_costs_per_category(access_token: str, purchase_orders: List[Dict]) -> Dict[str, float]:
+    """
+    Calculates the total cost of purchase orders per category.
+
+    Args:
+        access_token (str): MoySklad API access token.
+        purchase_orders (List[Dict]): List of purchase orders.
+
+    Returns:
+        Dict[str, float]: Dictionary mapping category names to total costs.
+    """
+    category_costs = {}
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Accept-Encoding": "gzip"
+    }
+    
+    # Initialize product cache
+    product_cache = {}
+
+    for order in purchase_orders:
+        # Fetch positions using the same method as in calculate_order_total
+        positions_meta = order.get("positions", {}).get("meta", {})
+        positions_href = positions_meta.get("href")
+        
+        if positions_href:
+            positions_response = requests.get(positions_href, headers=headers)
+            positions_response.raise_for_status()
+            positions = positions_response.json().get("rows", [])
+            
+            for position in positions:
+                assortment = position.get("assortment", {})
+                product_href = assortment.get("meta", {}).get("href")
+                quantity = float(position.get("quantity", 0))
+
+                # Fetch product details to get the category and buy price
+                if product_href:
+                    if product_href not in product_cache:
+                        try:
+                            product_response = requests.get(product_href, headers=headers)
+                            product_response.raise_for_status()
+                            product_data = product_response.json()
+                            
+                            # Get buy price from product data
+                            buy_price = product_data.get("buyPrice", {}).get("value", 0.0)
+                            
+                            category_meta = product_data.get("group", {}).get("meta", {})
+                            category_href = category_meta.get("href")
+
+                            if category_href:
+                                # Fetch category details
+                                category_response = requests.get(category_href, headers=headers)
+                                category_response.raise_for_status()
+                                category_data = category_response.json()
+                                category_name = category_data.get("name", "Без категории")
+                            else:
+                                category_name = "Без категории"
+                            
+                            # Cache the product category and buy price
+                            product_cache[product_href] = {
+                                "category": category_name,
+                                "buy_price": buy_price
+                            }
+                        except requests.HTTPError as e:
+                            print_api_errors(e.response)
+                            category_name = "Без категории"
+                            buy_price = 0.0
+                    else:
+                        cached_data = product_cache[product_href]
+                        category_name = cached_data["category"]
+                        buy_price = cached_data["buy_price"]
+                else:
+                    category_name = "Без категории"
+                    buy_price = 0.0
+
+                total_cost = buy_price * quantity
+
+                # Sum the total cost per category
+                if category_name in category_costs:
+                    category_costs[category_name] += total_cost
+                else:
+                    category_costs[category_name] = total_cost
+
+    return category_costs

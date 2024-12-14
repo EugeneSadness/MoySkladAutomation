@@ -322,7 +322,7 @@ def get_column_number(column_letter: str) -> int:
 
 def get_supply_dates_from_sheet3(worksheet) -> Dict[str, List[str]]:
     """
-    Получает вс�� будущие даты приемок из Листа3.
+    Получает все будущие даты приемок из Листа3.
     
     Returns:
         Dict[str, List[str]]: {код_товара: [будущие_даты]}
@@ -661,4 +661,70 @@ def fill_dates_sheet5(worksheet, days: int = 180):
     except Exception as e:
         print(f"Ошибка при заполнении дат: {str(e)}")
         raise
+
+def get_product_groups_from_sheet5(worksheet) -> List[str]:
+    """
+    Reads the category names from Лист5 after the special separator '/' in column A.
+
+    Args:
+        worksheet: Google Sheets worksheet object.
+
+    Returns:
+        List[str]: List of category names.
+    """
+    all_values = worksheet.col_values(1)
+    try:
+        separator_index = all_values.index('/') + 1
+    except ValueError:
+        print("Специальный знак '/' не найден в столбце A")
+        return []
+
+    # Categories start after the separator
+    categories = [cell.strip() for cell in all_values[separator_index:] if cell.strip()]
+    return categories
+
+def update_purchase_costs_in_sheet5(worksheet, purchase_costs: Dict[str, float], current_date: str):
+    """
+    Updates the summed purchase costs per category in Лист5 under the current date.
+
+    Args:
+        worksheet: Google Sheets worksheet object.
+        purchase_costs (Dict[str, float]): Dictionary mapping category names to total costs.
+        current_date (str): Current date in format "dd.mm.yyyy".
+    """
+    # Find the column number for the current date
+    header = worksheet.row_values(1)
+    try:
+        date_col_index = header.index(current_date) + 1  # gspread is 1-based
+    except ValueError:
+        print(f"Дата {current_date} не найдена в заголовке. Добавляем новую колонку.")
+        date_col_index = len(header) + 1
+        worksheet.update_cell(1, date_col_index, current_date)
+
+    # Find the row numbers for each category
+    all_categories = worksheet.col_values(1)
+    try:
+        separator_index = all_categories.index('/') + 1
+    except ValueError:
+        print("Специальный знак '/' не найден в столбце A")
+        return
+
+    category_rows = {}
+    for idx, category in enumerate(all_categories[separator_index:], start=separator_index + 1):
+        if category in purchase_costs:
+            category_rows[category] = idx
+
+    # Prepare batch updates
+    cell_updates = []
+    for category, total_cost in purchase_costs.items():
+        row = category_rows.get(category)
+        if row:
+            cell = gspread.Cell(row, date_col_index, f"{total_cost:.2f}")
+            cell_updates.append(cell)
+
+    if cell_updates:
+        worksheet.update_cells(cell_updates)
+        print(f"Суммы себестоимости обновлены для {len(cell_updates)} категорий.")
+    else:
+        print("Нет соответствующих категорий для обновления себестоимости.")
 

@@ -11,11 +11,13 @@ from services.google_sheets_handler import (
     update_product_details_in_sheet2, update_daily_stats_in_sheet2,
     update_sheet3, get_supply_dates_from_sheet3, update_supply_quantities_in_sheet3,
     get_sales_channels_and_statuses, update_sales_report_in_sheet5, update_categories_costs_in_sheet5,
-    update_daily_stats_in_sheet5_sliding_window, fill_dates_sheet5
+    update_daily_stats_in_sheet5_sliding_window, fill_dates_sheet5, get_product_groups_from_sheet5,
+    update_purchase_costs_in_sheet5
 )
 from services.moysklad_api import (
     fetch_product_details_by_codes, fetch_customer_orders_for_products,
-    fetch_supplies_by_date_range, fetch_orders_by_channels, fetch_categories_costs
+    fetch_supplies_by_date_range, fetch_orders_by_channels, fetch_categories_costs,
+    fetch_purchase_orders_in_transit_today, calculate_total_costs_per_category
 )
 from utils.date_handler import get_current_day_date_range
 
@@ -104,10 +106,10 @@ def process_sheet3(spreadsheet, token):
 
 def process_sheet5(worksheet, token):
     """
-    Обрабатывает Лист5: обновляет статистику по заказам и остаткам по категориям
+    Обрабатывает Лист5: обновляет статистику по заказам и остаткам по категориям,
+    а также суммирует себестоимость заказов поставщикам со статусом "В пути".
     """
     try:
-        fill_dates_sheet5(worksheet)
         # Сдвигаем все колонки влево в Sheet5, освобождая место для новых данных
         #update_daily_stats_in_sheet5_sliding_window(worksheet)
 
@@ -126,8 +128,27 @@ def process_sheet5(worksheet, token):
         
         # 5. Обновляем данные об остатках по категориям (после знака /)
         update_categories_costs_in_sheet5(worksheet, categories_costs)
+
+        # 6. Получаем названия групп товаров из Лист5 (после спец знака '/')
+        product_groups = get_product_groups_from_sheet5(worksheet)
         
-        print("Лист5 успешно обновлен")
+        # 7. Фетчим Заказы Поставщикам со статусом "В пути" за текущий день
+        purchase_orders = fetch_purchase_orders_in_transit_today(token)
+
+        print(purchase_orders)
+        
+        # 8. Рассчитываем себестоимость по категориям
+        purchase_costs = calculate_total_costs_per_category(token, purchase_orders)
+
+        print(purchase_costs)
+        
+        # 9. Фильтруем себестоимость только для нужных групп
+        filtered_purchase_costs = {category: cost for category, cost in purchase_costs.items() if category in product_groups}
+        
+        # 10. Обновляем Лист5 с суммами себестоимости
+        update_purchase_costs_in_sheet5(worksheet, filtered_purchase_costs, current_date)
+        
+        print("Лист5 успешно обновлен с учетом себестоимости заказов поставщикам")
         
     except Exception as e:
         print(f"Ошибка при обработке Лист5: {str(e)}")
