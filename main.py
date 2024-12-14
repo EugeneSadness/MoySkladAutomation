@@ -10,11 +10,12 @@ from services.google_sheets_handler import (
     get_product_codes_from_sheet2, get_products_with_details_sheet2,
     update_product_details_in_sheet2, update_daily_stats_in_sheet2,
     update_sheet3, get_supply_dates_from_sheet3, update_supply_quantities_in_sheet3,
-    get_sales_channels_and_statuses, update_sales_report_in_sheet5
+    get_sales_channels_and_statuses, update_sales_report_in_sheet5, update_categories_costs_in_sheet5,
+    update_daily_stats_in_sheet5_sliding_window, fill_dates_sheet5
 )
 from services.moysklad_api import (
     fetch_product_details_by_codes, fetch_customer_orders_for_products,
-    fetch_supplies_by_date_range, fetch_orders_by_channels
+    fetch_supplies_by_date_range, fetch_orders_by_channels, fetch_categories_costs
 )
 from utils.date_handler import get_current_day_date_range
 
@@ -103,26 +104,34 @@ def process_sheet3(spreadsheet, token):
 
 def process_sheet5(worksheet, token):
     """
-    Processes Sheet5 with sales channel statistics for the current date.
+    Обрабатывает Лист5: обновляет статистику по заказам и остаткам по категориям
     """
     try:
-        # Get sales channels grouped by status from Sheet5
+        fill_dates_sheet5(worksheet)
+        # Сдвигаем все колонки влево в Sheet5, освобождая место для новых данных
+        #update_daily_stats_in_sheet5_sliding_window(worksheet)
+
+        # 1. Получаем статусы и каналы продаж из таблицы
         status_channels = get_sales_channels_and_statuses(worksheet)
         
-        # Get current date in required format
+        # 2. Получаем данные о заказах по каналам (до знака /)
+        orders_report = fetch_orders_by_channels(token, status_channels)
+        
+        # 3. Получаем данные об остатках по категориям (после знака /)
+        categories_costs = fetch_categories_costs(token)
+        
+        # 4. Обновляем данные о заказах (до знака /)
         current_date = datetime.now().strftime("%d.%m.%Y")
+        update_sales_report_in_sheet5(worksheet, orders_report, current_date)
         
-        # Fetch orders and calculate totals by status and channel
-        report = fetch_orders_by_channels(token, status_channels)
-
+        # 5. Обновляем данные об остатках по категориям (после знака /)
+        update_categories_costs_in_sheet5(worksheet, categories_costs)
         
-        # Update the sheet
-        update_sales_report_in_sheet5(worksheet, report, current_date)
+        print("Лист5 успешно обновлен")
         
-        print("Sales report updated in Sheet5")
     except Exception as e:
-        print(f"Error processing Sheet5: {e}")
-        raise e
+        print(f"Ошибка при обработке Лист5: {str(e)}")
+        raise
 
 def main():
     CREDENTIALS_PATH = "./cred.json"

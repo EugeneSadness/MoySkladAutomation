@@ -1,6 +1,6 @@
 from typing import List, Dict
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from utils.error_handler import print_api_errors
 
@@ -32,7 +32,7 @@ def fetch_product_details_by_codes(access_token: str, product_codes: List[str], 
     """
     Получает информацию только о новых товарах.
     """
-    # Фи��ем коды товаров, оставляя только те, для которых нет информации
+    # Фием коды товаров, оставляя только те, для которых нет информации
     new_codes = [code for code in product_codes if code not in existing_products]
     
     if not new_codes:
@@ -370,7 +370,7 @@ def fetch_customer_orders_for_current_day(access_token: str) -> List[Dict]:
 
     return orders
 
-def generate_sales_report(access_token: str) -> Dict[str, Dict[str, float]]:
+def generate_sales_report(access_token: str) -> Dict[str, Dict[str, Dict[str, float]]]:
     """
     Generates a sales report for the current day, categorized by status and sales channel.
 
@@ -378,7 +378,7 @@ def generate_sales_report(access_token: str) -> Dict[str, Dict[str, float]]:
         access_token (str): Access token for authentication.
 
     Returns:
-        Dict[str, Dict[str, float]]: Nested dictionary with status as keys, sales channels as sub-keys,
+        Dict[str, Dict[str, Dict[str, float]]]: Nested dictionary with status as keys, sales channels as sub-keys,
                                       and total amounts as values.
     """
     sales_channels = fetch_sales_channels(access_token)
@@ -411,22 +411,20 @@ def generate_sales_report(access_token: str) -> Dict[str, Dict[str, float]]:
 
     return report
 
-def fetch_orders_by_channels(access_token: str, status_channels: Dict[str, List[str]]) -> Dict[str, Dict[str, float]]:
+def fetch_orders_by_channels(access_token: str, status_channels: Dict[str, List[str]]) -> Dict[str, Dict[str, Dict[str, float]]]:
     # Get purchase prices for all products
     purchase_prices = fetch_purchase_prices(access_token)
-    print("Loaded purchase prices:", purchase_prices)  # Debug print
+    print("Loaded purchase prices:", purchase_prices)
     
-    # Initialize results structure with special handling for combined statuses
+    # Initialize results structure
     report = {}
     for status, channels in status_channels.items():
         if status == "(Отменен, возврат)":
-            # Создаем временные ключи для обоих статусов
-            report["(Отменен)"] = {channel: 0.0 for channel in channels}
-            report["(Возврат)"] = {channel: 0.0 for channel in channels}
-            # Создаем итоговый ключ для суммы
-            report[status] = {channel: 0.0 for channel in channels}
+            report["(Отменен)"] = {channel: {} for channel in channels}
+            report["(Возврат)"] = {channel: {} for channel in channels}
+            report[status] = {channel: {} for channel in channels}
         else:
-            report[status] = {channel: 0.0 for channel in channels}
+            report[status] = {channel: {} for channel in channels}
 
     # Initialize caches
     product_cache = {}
@@ -440,9 +438,12 @@ def fetch_orders_by_channels(access_token: str, status_channels: Dict[str, List[
         "Accept-Encoding": "gzip"
     }
     
-    today = datetime.now().strftime("%Y-%m-%d")
+    # Get current date and date 180 days ahead
+    today = datetime.now()
+    end_date = today + timedelta(days=180)
+    
     params = {
-        "filter": f"moment>={today} 00:00:00;moment<={today} 23:59:59",
+        "filter": f"moment>={today.strftime('%Y-%m-%d')} 00:00:00;moment<={end_date.strftime('%Y-%m-%d')} 23:59:59",
         "limit": 1000,
         "expand": "positions,salesChannel,state"
     }
@@ -460,6 +461,10 @@ def fetch_orders_by_channels(access_token: str, status_channels: Dict[str, List[
                 break
                 
             for order in orders:
+                # Get order date
+                order_date = datetime.fromisoformat(order.get('moment', '').replace('Z', '+00:00'))
+                order_date_str = order_date.strftime("%d.%m.%Y")
+                
                 # Get state name
                 state_meta = order.get('state', {}).get('meta', {})
                 state_href = state_meta.get('href')
@@ -491,92 +496,26 @@ def fetch_orders_by_channels(access_token: str, status_channels: Dict[str, List[
                 if sheet_state_name in ["(Отменен)", "(Возврат)"]:
                     combined_state = "(Отменен, возврат)"
                     if combined_state in report and channel_name in report[combined_state]:
-                        # Сначала обновляем значение для конкретного статуса
-                        if sheet_state_name in report and channel_name in report[sheet_state_name]:
-                            positions_meta = order.get("positions", {}).get("meta", {})
-                            positions_href = positions_meta.get("href")
-                            
-                            if positions_href:
-                                # Получаем позиции заказа отдельным запросом
-                                positions_response = requests.get(positions_href, headers=headers)
-                                positions_response.raise_for_status()
-                                positions = positions_response.json().get("rows", [])
-                                print(f"Found {len(positions)} positions in order")
-                                
-                                order_total = 0.0
-                                
-                                for position in positions:
-                                    product_href = position.get("assortment", {}).get("meta", {}).get("href")
-                                    
-                                    if product_href not in product_cache:
-                                        product_response = requests.get(product_href, headers=headers)
-                                        product_response.raise_for_status()
-                                        product_data = product_response.json()
-                                        product_cache[product_href] = product_data.get("code")
-                                        
-                                    product_code = product_cache[product_href]
-                                    
-                                    if product_code:
-                                        quantity = float(position.get("quantity", 0))
-                                        buy_price = purchase_prices.get(product_code, 0.0)
-                                        position_cost = buy_price * quantity
-                                        order_total += position_cost
-                                        
-                                        print(f"Position details:")
-                                        print(f"  - Product code: {product_code}")
-                                        print(f"  - Quantity: {quantity}")
-                                        print(f"  - Buy price: {buy_price}")
-                                        print(f"  - Position cost: {position_cost}")
-                                
-                                report[sheet_state_name][channel_name] += order_total
-                                print(f"Order total cost: {order_total}")
-                                print(f"Updated total for {sheet_state_name} - {channel_name}: {report[sheet_state_name][channel_name]}")
-                        # Обновляем общую сумму для объединенного статуса
-                        report[combined_state][channel_name] = (
-                            report["(Отменен)"].get(channel_name, 0.0) + 
-                            report["(Возврат)"].get(channel_name, 0.0)
-                        )
-                else:
-                    # Обычная обработ��а для других статусов
-                    if sheet_state_name in report and channel_name in report[sheet_state_name]:
-                        positions_meta = order.get("positions", {}).get("meta", {})
-                        positions_href = positions_meta.get("href")
+                        # Обработка позиций заказа
+                        order_total = calculate_order_total(order, headers, product_cache, purchase_prices)
                         
-                        if positions_href:
-                            # Получаем позиции заказа отдельным запросом
-                            positions_response = requests.get(positions_href, headers=headers)
-                            positions_response.raise_for_status()
-                            positions = positions_response.json().get("rows", [])
-                            print(f"Found {len(positions)} positions in order")
+                        # Обновляем значения с учетом даты
+                        if order_total > 0:
+                            report[sheet_state_name][channel_name][order_date_str] = \
+                                report[sheet_state_name][channel_name].get(order_date_str, 0.0) + order_total
                             
-                            order_total = 0.0
-                            
-                            for position in positions:
-                                product_href = position.get("assortment", {}).get("meta", {}).get("href")
-                                
-                                if product_href not in product_cache:
-                                    product_response = requests.get(product_href, headers=headers)
-                                    product_response.raise_for_status()
-                                    product_data = product_response.json()
-                                    product_cache[product_href] = product_data.get("code")
-                                    
-                                product_code = product_cache[product_href]
-                                
-                                if product_code:
-                                    quantity = float(position.get("quantity", 0))
-                                    buy_price = purchase_prices.get(product_code, 0.0)
-                                    position_cost = buy_price * quantity
-                                    order_total += position_cost
-                                    
-                                    print(f"Position details:")
-                                    print(f"  - Product code: {product_code}")
-                                    print(f"  - Quantity: {quantity}")
-                                    print(f"  - Buy price: {buy_price}")
-                                    print(f"  - Position cost: {position_cost}")
-                            
-                            report[sheet_state_name][channel_name] += order_total
-                            print(f"Order total cost: {order_total}")
-                            print(f"Updated total for {sheet_state_name} - {channel_name}: {report[sheet_state_name][channel_name]}")
+                            # Обновляем общую сумму для объединенного статуса
+                            report[combined_state][channel_name][order_date_str] = \
+                                (report["(Отменен)"][channel_name].get(order_date_str, 0.0) + 
+                                 report["(Возврат)"][channel_name].get(order_date_str, 0.0))
+                else:
+                    # Обычная обработка для других статусов
+                    if sheet_state_name in report and channel_name in report[sheet_state_name]:
+                        order_total = calculate_order_total(order, headers, product_cache, purchase_prices)
+                        
+                        if order_total > 0:
+                            report[sheet_state_name][channel_name][order_date_str] = \
+                                report[sheet_state_name][channel_name].get(order_date_str, 0.0) + order_total
             
             if len(orders) < params["limit"]:
                 break
@@ -587,11 +526,109 @@ def fetch_orders_by_channels(access_token: str, status_channels: Dict[str, List[
             print_api_errors(e.response)
             raise e
     
-    # Удаляем временные ключи перед возвратом результата
+    # Получаем остатки по категориям
+    categories_costs = fetch_categories_costs(access_token)
+    
+    # Добавляем информацию об остатках в отчет
+    report["Остатки"] = categories_costs
+    
+    # Удаляем временные ключи
     if "(Отменен)" in report:
         del report["(Отменен)"]
     if "(Возврат)" in report:
         del report["(Возврат)"]
 
-    print("\nFinal report structure:", report)
     return report
+
+def calculate_order_total(order, headers, product_cache, purchase_prices):
+    """Helper function to calculate order total"""
+    order_total = 0.0
+    positions_meta = order.get("positions", {}).get("meta", {})
+    positions_href = positions_meta.get("href")
+    
+    if positions_href:
+        positions_response = requests.get(positions_href, headers=headers)
+        positions_response.raise_for_status()
+        positions = positions_response.json().get("rows", [])
+        
+        for position in positions:
+            product_href = position.get("assortment", {}).get("meta", {}).get("href")
+            
+            if product_href not in product_cache:
+                product_response = requests.get(product_href, headers=headers)
+                product_response.raise_for_status()
+                product_data = product_response.json()
+                product_cache[product_href] = product_data.get("code")
+                
+            product_code = product_cache[product_href]
+            
+            if product_code:
+                quantity = float(position.get("quantity", 0))
+                buy_price = purchase_prices.get(product_code, 0.0)
+                position_cost = buy_price * quantity
+                order_total += position_cost
+    
+    return order_total
+
+def fetch_categories_costs(access_token: str) -> Dict[str, float]:
+    """
+    Получает суммарную себестоимость товаров по категориям
+    """
+    url = "https://api.moysklad.ru/api/remap/1.2/report/stock/all"
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Accept-Encoding": "gzip"
+    }
+    
+    # Инициализируем словарь для хранения сумм по категориям
+    categories_total = {"Всего": 0.0}  # Только общая сумма изначально
+    
+    offset = 0
+    limit = 1000
+    
+    while True:
+        params = {
+            "limit": limit,
+            "offset": offset,
+            "groupBy": "product"  # Группируем по товарам
+        }
+        
+        try:
+            response = requests.get(url, headers=headers, params=params)
+            response.raise_for_status()
+            data = response.json()
+            
+            rows = data.get("rows", [])
+            if not rows:
+                break
+                
+            for item in rows:
+                stock = float(item.get("stock", 0))
+                price = float(item.get("price", 0))
+                total_cost = stock * price
+                
+                # Получаем категорию товара
+                folder = item.get("folder", {})
+                category_name = folder.get("name", "Без категории") if folder else "Без категории"
+                
+                # Если категория встречается впервые, добавляем её в словарь
+                if category_name not in categories_total:
+                    categories_total[category_name] = 0.0
+                
+                # Добавляем стоимость в соответствующую категорию
+                categories_total[category_name] += total_cost
+                    
+                # Добавляем в общую сумму
+                categories_total["Всего"] += total_cost
+            
+            if len(rows) < limit:
+                break
+                
+            offset += limit
+            
+        except requests.HTTPError as e:
+            print_api_errors(e.response)
+            raise e
+    
+    print(f"Found categories with total costs: {categories_total}")
+    return categories_total
