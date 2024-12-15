@@ -1,4 +1,9 @@
+import time
 from datetime import datetime
+
+import pytz
+import schedule
+
 from services.google_sheets_handler import (
     get_product_codes_from_sheet, update_product_details_in_sheet,
     get_products_with_details, update_daily_stats_in_sheet,
@@ -11,9 +16,14 @@ from services.google_sheets_handler import (
 from services.moysklad_api import (
     fetch_product_details_by_codes, fetch_customer_orders_for_products,
     fetch_supplies_by_date_range, fetch_orders_by_channels, fetch_categories_costs, fetch_stock_CHINA_in_transit,
-    fetch_url_stock_CHINA_in_transit
+    fetch_url_stock_CHINA_in_transit, fetch_product_stock
 )
 from utils.date_handler import get_current_day_date_range
+import gspread
+
+from auth.google_auth import authenticate_google_sheets
+from auth.moysklad_auth import get_access_token
+import config
 
 def process_sheet1(spreadsheet, token):
     """Handles processing for Sheet1"""
@@ -35,7 +45,7 @@ def process_sheet1(spreadsheet, token):
     update_daily_stats_in_sheet(worksheet1, orders_data)
     print("Daily statistics updated in Sheet1")
 
-def process_sheet2(client, spreadsheet, token):
+def process_sheet2(spreadsheet, token):
     """Handles processing for Sheet2"""
     try:
         worksheet = spreadsheet.worksheet("Лист2")
@@ -54,8 +64,10 @@ def process_sheet2(client, spreadsheet, token):
     except Exception as e:
         print(f"Error processing Sheet2: {e}")
 
+
+
 def process_sheet3(spreadsheet, token):
-    """Обрабатывает данные приемок для Листа3 для будущих дат"""
+    """Об��абатывает данные приемок для Листа3 для будущих дат"""
     try:
         worksheet3 = spreadsheet.worksheet("Лист3")
         sheet3_sliding_window(worksheet3)
@@ -64,6 +76,8 @@ def process_sheet3(spreadsheet, token):
             print("Нет данных для обработки будущих приемок")
             return
         current_date = datetime.now().strftime("%Y-%m-%d")
+
+        # Fetch supplies
         supplies = fetch_supplies_by_date_range(token, current_date)
         supplies_quantities = {}
         for supply in supplies:
@@ -81,6 +95,21 @@ def process_sheet3(spreadsheet, token):
             except ValueError as e:
                 print(f"Ошибка обработки даты для приемки {supply.get('id')}: {e}")
                 continue
+
+        # Fetch product stock quantities
+        product_codes = [row[0] for row in worksheet3.get_all_values()[3:] if row[0].strip()]
+        stock_quantities = fetch_product_stock(token, product_codes)
+
+        # Update stock quantities in column D
+        cells_to_update = []
+        for idx, code in enumerate(product_codes, start=4):
+            stock_quantity = stock_quantities.get(code, 0)
+            cells_to_update.append(gspread.Cell(idx, 4, stock_quantity))  # Column D
+
+        if cells_to_update:
+            worksheet3.update_cells(cells_to_update)
+            print("Stock quantities updated in column D")
+
         if supplies_quantities:
             update_supply_quantities_in_sheet3(worksheet3, supplies_quantities)
             print(f"Данные о будущих приемках обновлены в Лист3")
@@ -91,7 +120,7 @@ def process_sheet3(spreadsheet, token):
         raise
 
 def process_sheet5(worksheet, token):
-    """Обрабатывает Лист5: обновляет статистику по заказам и остаткам по категориям"""
+    """Обрабатывает Лист5: обновляет статистику п�� заказам и остаткам по категориям"""
     try:
         status_channels = get_sales_channels_and_statuses(worksheet)
         orders_report = fetch_orders_by_channels(token, status_channels)
@@ -105,3 +134,71 @@ def process_sheet5(worksheet, token):
     except Exception as e:
         print(f"Ошибка при обработке Лист5: {str(e)}")
         raise 
+
+
+def schedule_process_sheets(spreadsheet, token):
+    # Define the Moscow timezone
+    moscow_tz = pytz.timezone('Europe/Moscow')
+
+    # Schedule the tasks
+    schedule.every().day.at("00:10").do(process_sheet1, spreadsheet, token)
+    schedule.every().day.at("00:10").do(process_sheet2, spreadsheet, token)
+    schedule.every().day.at("00:10").do(process_sheet3, spreadsheet, token)
+    schedule.every().day.at("23:50").do(process_sheet5, spreadsheet, token)
+
+
+    while True:
+        # Run pending tasks
+        schedule.run_pending()
+        time.sleep(30)  # Wait a minute before checking again
+
+
+def process_all_sheets():
+    try:
+        client = authenticate_google_sheets(config.CREDENTIALS_PATH)
+        spreadsheet = client.open(config.SHEET_NAME)
+
+        # Get MoySklad token
+        token = get_access_token(config.MS_USERNAME, config.MS_PASSWORD)
+        print("Access Token:", token)
+
+        # Process Sheet1
+        process_sheet1(spreadsheet, token)
+
+        # Process Sheet2
+        process_sheet2(spreadsheet, token)
+
+        # Обработка данных для Листа3
+        try:
+            worksheet3 = spreadsheet.worksheet("Лист3")
+        except gspread.WorksheetNotFound:
+            worksheet3 = spreadsheet.add_worksheet(title="Лист3", rows="1000", cols="3")
+            print("Лист3 создан.")
+
+        # Объединяем продукты из Sheet1 и Sheet2
+        combined_products = {**get_products_with_details(spreadsheet.sheet1), **get_products_with_details_sheet2(spreadsheet.worksheet("Лист2"))}
+
+        # Обновляем Лист3
+        update_sheet3(worksheet3, combined_products)
+        print("Данные успешно записаны в Лист3.")
+
+        # Process Sheet3
+        process_sheet3(spreadsheet, token)
+
+        # Process Sheet5
+        try:
+            worksheet5 = spreadsheet.worksheet("Лист5")
+        except gspread.WorksheetNotFound:
+            worksheet5 = spreadsheet.add_worksheet(title="Лист5", rows="1000", cols="20")
+            print("Лист5 создан.")
+
+        process_sheet5(worksheet5, token)
+
+        # Schedule the tasks
+        schedule_process_sheets(spreadsheet, token)
+
+        return 0
+    
+    except Exception as e:
+        print(f"Error occurred: {e}")
+        return None 
