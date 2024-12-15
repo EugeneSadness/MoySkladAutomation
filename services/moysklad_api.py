@@ -70,6 +70,7 @@ def fetch_product_details_by_codes(access_token: str, product_codes: List[str], 
     return products_dict
 
 def fetch_customer_orders_for_products(access_token: str, start_date: str, end_date: str, products: Dict[str, Dict]) -> List[Dict]:
+    
     url = "https://api.moysklad.ru/api/remap/1.2/entity/customerorder"
     headers = {
         "Authorization": f"Bearer {access_token}",
@@ -139,6 +140,7 @@ def fetch_customer_orders_for_products(access_token: str, start_date: str, end_d
     return result 
 
 def fetch_product_stock(access_token: str, product_codes: List[str]) -> Dict[str, float]:
+    china_transit_url = fetch_url_stock_CHINA_in_transit(access_token)
     """
     Получает физические остатки для списка товаров.
     
@@ -155,10 +157,14 @@ def fetch_product_stock(access_token: str, product_codes: List[str]) -> Dict[str
         "Accept-Encoding": "gzip"
     }
     
+    params = {
+        "filter": f"store!={china_transit_url}"
+    }
+    
     stock_dict = {}
     
     try:
-        response = requests.get(url, headers=headers)
+        response = requests.get(url, headers=headers, params=params)
         response.raise_for_status()
         data = response.json()
         
@@ -174,6 +180,7 @@ def fetch_product_stock(access_token: str, product_codes: List[str]) -> Dict[str
     return stock_dict 
 
 def fetch_supplies_by_date_range(access_token: str, start_date: str) -> List[Dict]:
+    china_transit_url = fetch_url_stock_CHINA_in_transit(access_token)
     """
     Получает список приемок за указанный период.
     
@@ -194,7 +201,8 @@ def fetch_supplies_by_date_range(access_token: str, start_date: str) -> List[Dic
     params = {
         "filter": f"moment>{start_date} 00:00:00",
         "limit": 100,
-        "expand": "positions"
+        "expand": "positions",
+        "filter": f"store!={china_transit_url}"
     }
     
     supplies = []
@@ -318,7 +326,7 @@ def fetch_purchase_prices(access_token: str) -> Dict[str, float]:
             data = response.json()
             for product in data.get("rows", []):
                 code = product.get("code")
-                buy_price = product.get("buyPrice", {}).get("value", 0)
+                buy_price = product.get("buyPrice", {}).get("value", 0.0) / 100  # Convert from kopeks to rubles
                 if code:
                     purchase_prices[code] = buy_price
             if len(data.get("rows", [])) < limit:
@@ -571,6 +579,7 @@ def calculate_order_total(order, headers, product_cache, purchase_prices):
     return order_total
 
 def fetch_categories_costs(access_token: str) -> Dict[str, float]:
+    china_transit_url = fetch_url_stock_CHINA_in_transit(access_token)
     """
     Получает суммарную себестоимость товаров по категориям
     """
@@ -590,7 +599,8 @@ def fetch_categories_costs(access_token: str) -> Dict[str, float]:
         params = {
             "limit": limit,
             "offset": offset,
-            "groupBy": "product"  # Группируем по товарам
+            "groupBy": "product",
+            "filter": f"store!={china_transit_url}"
         }
         
         try:
@@ -604,7 +614,7 @@ def fetch_categories_costs(access_token: str) -> Dict[str, float]:
                 
             for item in rows:
                 stock = float(item.get("stock", 0))
-                price = float(item.get("price", 0))
+                price = float(item.get("price", 0)) / 100  # Convert from kopeks to rubles
                 total_cost = stock * price
                 
                 # Получаем категорию товара
@@ -632,3 +642,82 @@ def fetch_categories_costs(access_token: str) -> Dict[str, float]:
     
     print(f"Found categories with total costs: {categories_total}")
     return categories_total
+
+def fetch_url_stock_CHINA_in_transit(access_token: str) -> str:
+    """
+    Fetches all purchase orders with status "В пути" for the current date.
+
+    Args:
+        access_token (str): MoySklad API access token.
+
+    Returns:
+        str: URL of the store with name "В ПУТИ ИЗ КИТАЯ"
+    """
+    url = "https://api.moysklad.ru/api/remap/1.2/entity/store/"
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Accept-Encoding": "gzip"
+    }
+
+    params = {
+        "filter": f"name=В ПУТИ ИЗ КИТАЯ"
+    }
+
+    response = requests.get(url, headers=headers, params=params)
+    response.raise_for_status()
+    data = response.json()
+    rows = data.get("rows", [])
+    
+    if not rows:
+        raise ValueError("Store 'В ПУТИ ИЗ КИТАЯ' not found")
+        
+    store = rows[0]  # Get first matching store
+    store_url = store.get("meta", {}).get("href")
+    
+    if not store_url:
+        raise ValueError("Store URL not found in response")
+        
+    return store_url
+
+def fetch_stock_CHINA_in_transit(access_token: str) -> Dict[str, int]:
+    store_url = fetch_url_stock_CHINA_in_transit(access_token)
+    url = f"https://api.moysklad.ru/api/remap/1.2/report/stock/bystore"
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Accept-Encoding": "gzip"
+    }
+
+    params = {
+        "filter": f"store={store_url}"
+    }
+
+    response = requests.get(url, headers=headers, params=params)
+    response.raise_for_status()
+    stock_data = response.json()
+
+    category_totals = {}
+
+    for row in stock_data.get('rows', []):
+        product_href = row.get('meta').get('href')
+        
+        # Fetch product details
+        product_response = requests.get(product_href, headers=headers)
+        product_response.raise_for_status()
+        product_details = product_response.json()
+
+        category_name = product_details.get('pathName', 'Unknown')
+        buy_price = product_details.get('buyPrice', {}).get('value', 0.0) / 100  # Convert from kopeks to rubles
+
+        # Calculate total value for each store
+        for store in row.get('stockByStore', []):
+            store_quantity = store.get('stock')
+            store_total = store_quantity * buy_price
+
+            # Add to category totals
+            if category_name in category_totals:
+                category_totals[category_name] += store_total
+            else:
+                category_totals[category_name] = store_total
+
+
+    return category_totals

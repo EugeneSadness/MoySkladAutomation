@@ -331,7 +331,7 @@ def get_supply_dates_from_sheet3(worksheet) -> Dict[str, List[str]]:
     current_date = datetime.now().date()
     
     # Получаем заголовки с датами (начиная с G2)
-    dates_row = worksheet.row_values(2)[6:]  # G2 и правее
+    dates_row = worksheet.row_values(2)[4:]  # G2 и правее
     
     # Фильтруем только будущие даты
     future_dates = []
@@ -361,6 +361,63 @@ def get_supply_dates_from_sheet3(worksheet) -> Dict[str, List[str]]:
     
     return product_supplies
 
+def sheet3_sliding_window(worksheet, num_dates: int = 90):
+    """
+    Сдвигает все колонки влево в Sheet5, удаляя крайнюю левую дату и добавляя новую дату справа.
+    Ближайшая дата всегда слева, дальняя справа.
+
+    Args:
+        worksheet: Рабочий лист Google Sheets
+        num_dates: Количество дат для отображения
+    """
+    # Получаем все значения
+    all_data = worksheet.get_all_values()
+    header_row = all_data[1]  # Вторая строка с датами (строка 2)
+
+    # Находим даты в заголовке, начиная с колонки E (индекс 4)
+    dates = []
+    date_cols = []  # Индексы колонок с датами
+    for idx, cell in enumerate(header_row[4:], start=4):  # Начинаем с E колонки (индекс 4)
+        if cell.strip() and not cell.startswith('#'):
+            dates.append(cell)
+            date_cols.append(idx)
+
+    # Если есть даты для сдвига
+    if dates:
+        # Получаем самую правую дату и преобразуем ее
+        rightmost_date = datetime.strptime(dates[-1], "%d.%m.%Y")
+        # Добавляем один день к самой правой дате
+        new_date = (rightmost_date + timedelta(days=1)).strftime("%d.%m.%Y")
+
+        updates = []
+
+        # Для каждой строки
+        for row_idx, row in enumerate(all_data, start=1):
+            # Сохраняем первые 4 колонки (A-D)
+            new_row = row[:4]
+
+            if row_idx == 2:  # Для строки с датами (строка 2)
+                # Добавляем все существующие даты, кроме первой
+                new_row.extend([row[i] for i in date_cols[1:]])
+                # Добавляем новую дату в конец
+                new_row.append(new_date)
+            else:  # Для остальных строк
+                # Добавляем все значения, кроме первого
+                new_row.extend([row[i] for i in date_cols[1:]])
+                # Добавляем пустую ячейку в конец
+                new_row.append("")
+
+            # Добавляем обновление для этой строки
+            range_name = f'A{row_idx}:{get_column_letter(len(new_row))}{row_idx}'
+            updates.append({
+                'range': range_name,
+                'values': [new_row]
+            })
+
+        # Выполняем batch-обновление
+        if updates:
+            worksheet.batch_update(updates)
+
 def update_supply_quantities_in_sheet3(worksheet, supplies_data: Dict[str, Dict[str, float]]):
     """
     Обновляет количества в приемках в Листе3 для будущих дат.
@@ -369,21 +426,32 @@ def update_supply_quantities_in_sheet3(worksheet, supplies_data: Dict[str, Dict[
         worksheet: Рабочий лист
         supplies_data: {код_товара: {дата: количество}}
     """
-    # Получаем заголовки с датами
-    dates_row = worksheet.row_values(2)[6:]  # G2 и правее
-    
-    # Создаем словарь для маппинга дат к колонкам
-    date_to_column = {}
-    for idx, date_str in enumerate(dates_row):
-        if date_str.strip():
-            column_letter = chr(71 + idx)  # G = 71 в ASCII
-            date_to_column[date_str] = column_letter
-    
     # Получаем все значения
     all_values = worksheet.get_all_values()
     
+    # Получаем даты из строки 2
+    dates_row = worksheet.row_values(2)
+    
+    # Очищаем только данные о заказах, сохраняя даты
+    # Начинаем с E4 (пропускаем заголовки и даты)
+    clear_range = f'E4:{get_column_letter(worksheet.col_count)}{len(all_values)}'
+    worksheet.batch_clear([clear_range])
+    
+    # Получаем все уникальные даты из supplies_data и сортируем их
+    all_dates = set()
+    for product_dates in supplies_data.values():
+        all_dates.update(product_dates.keys())
+    sorted_dates = sorted(list(all_dates))
+    
+    # Создаем словарь для маппинга дат к колонкам
+    date_to_column = {}
+    for idx, date_str in enumerate(dates_row[4:], start=0):  # Начинаем с E колонки (индекс 4)
+        if date_str.strip():  # Пропускаем пустые ячейки
+            date_to_column[date_str] = chr(69 + idx)  # E = 69 в ASCII
+    
     # Обновляем количества
-    updates = []
+    value_updates = []
+    format_updates = []
     for row_idx, row in enumerate(all_values[3:], start=4):  # Начинаем с 4-й строки
         product_code = row[0].strip()
         if product_code in supplies_data:
@@ -392,15 +460,17 @@ def update_supply_quantities_in_sheet3(worksheet, supplies_data: Dict[str, Dict[
                 if date_str in date_to_column:
                     column_letter = date_to_column[date_str]
                     cell = f"{column_letter}{row_idx}"
-                    updates.append({
+                    value_updates.append({
                         'range': cell,
                         'values': [[quantity]]
                     })
     
     # Применяем обновления батчем
-    if updates:
-        worksheet.batch_update(updates)
-        print(f"Обновлены данные о приемках для {len(updates)} ячеек")
+    if value_updates:
+        worksheet.batch_update(value_updates)
+        for format_update in format_updates:
+            worksheet.format(format_update['range'], format_update['format'])
+        print(f"Обновлены данные о приемках для {len(value_updates)} ячеек")
 
 def get_sales_channels_and_statuses(worksheet) -> Dict[str, List[str]]:
     """
@@ -430,10 +500,11 @@ def get_sales_channels_and_statuses(worksheet) -> Dict[str, List[str]]:
             
     return status_channels
 
+
 def update_sales_report_in_sheet5(worksheet, report: Dict[str, Dict[str, Dict[str, float]]], current_date: str):
     """
     Updates Sheet5 with the sales report data for multiple dates.
-    
+
     Args:
         worksheet: Google Sheets worksheet for Sheet5.
         report: Dictionary with statuses as keys and channel/date amounts as values.
@@ -442,22 +513,22 @@ def update_sales_report_in_sheet5(worksheet, report: Dict[str, Dict[str, Dict[st
     # Get all statuses and channels with their row numbers
     channel_rows = {}
     current_status = None
-    
+
     for idx, cell in enumerate(worksheet.col_values(1), start=1):
         cell = cell.strip()
         if cell.startswith('\\'):
             break
         if not cell or cell.startswith('#'):
             continue
-            
+
         if cell.startswith('(') and cell.endswith(')'):
             current_status = cell
         elif current_status and cell:
             channel_rows[(current_status, cell)] = idx
-    
+
     # Get existing dates from header
     dates = get_dates_from_header(worksheet)
-    
+
     # First clear existing values for all channels and dates
     clear_updates = []
     for (status, channel), row in channel_rows.items():
@@ -467,10 +538,10 @@ def update_sales_report_in_sheet5(worksheet, report: Dict[str, Dict[str, Dict[st
                 'range': f'{get_column_letter(date_col)}{row}',
                 'values': [['']]  # Clear cell by setting empty value
             })
-    
+
     if clear_updates:
         worksheet.batch_update(clear_updates)
-    
+
     # Prepare batch updates with new values
     updates = []
     for status, channels in report.items():
@@ -480,15 +551,16 @@ def update_sales_report_in_sheet5(worksheet, report: Dict[str, Dict[str, Dict[st
                 for date_str, amount in date_amounts.items():
                     if date_str not in dates:
                         continue
-                    
+
                     date_col = dates.index(date_str) + 2  # +2 because we start from column B
                     updates.append({
                         'range': f'{get_column_letter(date_col)}{row}',
                         'values': [[amount]]
                     })
-    
+
     if updates:
         worksheet.batch_update(updates)
+
 
 def get_dates_from_header(worksheet) -> List[str]:
     """
@@ -504,17 +576,18 @@ def get_dates_from_header(worksheet) -> List[str]:
     dates = [date.strip() for date in header if date.strip()]
     return dates
 
+
 def update_categories_costs_in_sheet5(worksheet, categories_costs: Dict[str, float]):
     """
     Обновляет суммарную себестоимость товаров по категориям в Листе5 после спец. знака '\'
-    
+
     Args:
         worksheet: Рабочий лист Google Sheets
         categories_costs: Словарь с суммами по категориям {категория: сумма}
     """
     # Получаем текущую дату
     current_date = datetime.now().strftime("%d.%m.%Y")
-    
+
     # Получаем все даты из заголовка, игнорируя столбцы со знаком #
     header_row = worksheet.row_values(1)
     dates = []
@@ -523,7 +596,7 @@ def update_categories_costs_in_sheet5(worksheet, categories_costs: Dict[str, flo
         if cell.strip() and not cell.startswith('#'):
             dates.append(cell.strip())
             date_cols.append(idx)
-    
+
     # Определяем колонку для текущей даты
     if current_date not in dates:
         # Если текущей даты нет, добавляем новую колонку
@@ -543,25 +616,25 @@ def update_categories_costs_in_sheet5(worksheet, categories_costs: Dict[str, flo
 
     # Пропускаем строку "Остатки"
     start_row = separator_row + 2
-    
+
     # Получаем все категории из столбца A после заголовка "Остатки"
     categories_in_sheet = []
     for cell in col_a_values[start_row:]:
         if not cell.strip():
             break
         categories_in_sheet.append(cell.strip())
-    
+
     # Подготавливаем обновления
     updates = []
     current_row = start_row
-    
+
     # Обновляем значения только для существующих категорий
     for category in categories_in_sheet:
         cost = categories_costs.get(category, 0.0)
         cell = gspread.Cell(current_row + 1, date_col, f"{cost:.2f}")  # Используем колонку с текущей датой
         updates.append(cell)
         current_row += 1
-    
+
     if updates:
         try:
             worksheet.update_cells(updates)
@@ -570,11 +643,79 @@ def update_categories_costs_in_sheet5(worksheet, categories_costs: Dict[str, flo
             print(f"Ошибка при обновлении данных о себестоимости: {str(e)}")
             raise
 
+def update_transits_costs_in_sheet5(worksheet, categories_costs: Dict[str, float]):
+    """
+    Обновляет суммарную себестоимость товаров по категориям в Листе5 после спец. знака '/'
+
+    Args:
+        worksheet: Рабочий лист Google Sheets
+        categories_costs: Словарь с суммами по категориям {категория: сумма}
+    """
+    # Получаем текущую дату
+    current_date = datetime.now().strftime("%d.%m.%Y")
+
+    # Получаем все даты из заголовка, игнорируя столбцы со знаком #
+    header_row = worksheet.row_values(1)
+    dates = []
+    date_cols = []  # Сохраняем индексы столбцов с датами
+    for idx, cell in enumerate(header_row[1:], start=2):  # Начинаем с B (индекс 2)
+        if cell.strip() and not cell.startswith('#'):
+            dates.append(cell.strip())
+            date_cols.append(idx)
+
+    # Определяем колонку для текущей даты
+    if current_date not in dates:
+        # Если текущей даты нет, добавляем новую колонку
+        new_column = date_cols[-1] + 1 if date_cols else 2
+        worksheet.update_cell(1, new_column, current_date)
+        date_col = new_column
+    else:
+        date_col = date_cols[dates.index(current_date)]
+
+    # Находим строку со спец. знаком '/'
+    col_a_values = worksheet.col_values(1)
+    try:
+        separator_row = col_a_values.index('/') + 1
+    except ValueError:
+        print("Специальный знак '/' не найден в столбце A")
+        return
+
+    # Пропускаем строку "В пути"
+    start_row = separator_row + 2
+
+    # Получаем все категории из столбца A после заголовка "В пути"
+    categories_in_sheet = []
+    for cell in col_a_values[start_row:]:
+        if not cell.strip():
+            break
+        categories_in_sheet.append(cell.strip())
+
+    # Подготавливаем обновления
+    updates = []
+    current_row = start_row
+
+    # Обновляем значения только для существующих категорий
+    for category in categories_in_sheet:
+        cost = categories_costs.get(category, 0.0)
+        cell = gspread.Cell(current_row + 1, date_col, f"{cost:.2f}")  # Используем колонку с текущей датой
+        updates.append(cell)
+        current_row += 1
+
+    if updates:
+        try:
+            worksheet.update_cells(updates)
+            print(f"Обновлены данные о товарах в пути для {len(categories_costs)} категорий")
+        except Exception as e:
+            print(f"Ошибка при обновлении данных о товарах в пути: {str(e)}")
+            raise
+
+
+
 def update_daily_stats_in_sheet5_sliding_window(worksheet, num_dates: int = 180):
     """
     Сдвигает все колонки влево в Sheet5, удаляя крайнюю левую дату и добавляя новую дату справа.
     Ближайшая дата всегда слева, дальняя справа.
-    
+
     Args:
         worksheet: Рабочий лист Google Sheets
         num_dates: Количество дат для отображения
@@ -582,7 +723,7 @@ def update_daily_stats_in_sheet5_sliding_window(worksheet, num_dates: int = 180)
     # Получаем все значения
     all_data = worksheet.get_all_values()
     header_row = all_data[0]  # Первая строка с датами
-    
+
     # Находим даты в заголовке
     dates = []
     date_cols = []  # Индексы колонок с датами
@@ -590,20 +731,20 @@ def update_daily_stats_in_sheet5_sliding_window(worksheet, num_dates: int = 180)
         if cell.strip() and not cell.startswith('#'):
             dates.append(cell)
             date_cols.append(idx)
-    
+
     # Если есть даты для сдвига
     if dates:
         # Получаем самую правую дату и преобразуем ее
         rightmost_date = datetime.strptime(dates[-1], "%d.%m.%Y")
         # Добавляем один день к самой правой дате
         new_date = (rightmost_date + timedelta(days=1)).strftime("%d.%m.%Y")
-        
+
         updates = []
-        
+
         # Для каждой строки
         for row_idx, row in enumerate(all_data, start=1):
             new_row = [row[0]]  # Первая колонка (A)
-            
+
             if row_idx == 1:  # Для заголовка
                 # Добавляем все существующие даты, кроме первой
                 new_row.extend([row[i] for i in date_cols[1:]])
@@ -614,23 +755,26 @@ def update_daily_stats_in_sheet5_sliding_window(worksheet, num_dates: int = 180)
                 new_row.extend([row[i] for i in date_cols[1:]])
                 # Добавляем пустую ячейку в конец
                 new_row.append("")
-            
+
             # Добавляем обновление для этой строки
             range_name = f'A{row_idx}:{get_column_letter(len(new_row))}{row_idx}'
             updates.append({
                 'range': range_name,
                 'values': [new_row]
             })
-        
+
         # Выполняем batch-обновление
         if updates:
             worksheet.batch_update(updates)
+
+
+
 
 def fill_dates_sheet5(worksheet, days: int = 180):
     """
     Заполняет Sheet5 датами на заданное количество дней вперед.
     Даты располагаются слева направо, от ближайшей к самой дальней.
-    
+
     Args:
         worksheet: Рабочий лист Google Sheets (Sheet5)
         days: Количество дней для генерации дат (по умолчанию 180)
@@ -638,26 +782,26 @@ def fill_dates_sheet5(worksheet, days: int = 180):
     try:
         # Устанавливаем конечную дату (13.12.2024)
         end_date = datetime(2024, 12, 13).date()
-        
+
         # Вычисляем начальную дату (на указанное количество дней вперед от конечной)
         start_date = end_date + timedelta(days=days)
-        
+
         # Генерируем список дат
         dates = []
         current_date = end_date
         while current_date <= start_date:
             dates.append(current_date.strftime("%d.%m.%Y"))
             current_date += timedelta(days=1)
-        
+
         # Подготавливаем обновление для первой строки
         # Начинаем с колонки B (индекс 2)
         update_range = f'B1:{get_column_letter(len(dates) + 1)}1'
-        
+
         # Обновляем даты в таблице
         worksheet.update(update_range, [dates])
-        
+
         print(f"Даты успешно заполнены. Добавлено {len(dates)} дат с {dates[0]} по {dates[-1]}")
-        
+
     except Exception as e:
         print(f"Ошибка при заполнении дат: {str(e)}")
         raise
