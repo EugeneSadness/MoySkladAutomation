@@ -1,0 +1,11 @@
+
+services:
+  app:
+    build: .
+    ports:
+      - "5000:80"
+    volumes:
+      - .:/app
+    environment:
+      - CREDENTIALS_PATH=/app/cred.json
+      - SHEET_NAME=test

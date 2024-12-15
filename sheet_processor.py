@@ -130,27 +130,36 @@ def process_sheet5(worksheet, token):
         update_categories_costs_in_sheet5(worksheet, categories_costs)
         transits_costs = fetch_stock_CHINA_in_transit(token)
         update_transits_costs_in_sheet5(worksheet, transits_costs)
-        print("Лист5 успешно обновлен")
+        print("Ли��т5 успешно обновлен")
     except Exception as e:
         print(f"Ошибка при обработке Лист5: {str(e)}")
         raise 
 
 
 def schedule_process_sheets(spreadsheet, token):
-    # Define the Moscow timezone
     moscow_tz = pytz.timezone('Europe/Moscow')
+
+    def update_sheet3_combined():
+        """Вспомогательная функция для обновления Листа3 с комбинированными данными"""
+        worksheet3 = spreadsheet.worksheet("Лист3")
+        combined_products = {
+            **get_products_with_details(spreadsheet.sheet1),
+            **get_products_with_details_sheet2(spreadsheet.worksheet("Лист2"))
+        }
+        update_sheet3(worksheet3, combined_products)
+        print("Данные успешно записаны в Лист3.")
 
     # Schedule the tasks
     schedule.every().day.at("00:10").do(process_sheet1, spreadsheet, token)
-    schedule.every().day.at("00:10").do(process_sheet2, spreadsheet, token)
-    schedule.every().day.at("00:10").do(process_sheet3, spreadsheet, token)
+    schedule.every().day.at("00:13").do(process_sheet2, spreadsheet, token)
+    # Добавляем обновление combined products после обновления листов 1 и 2
+    schedule.every().day.at("00:16").do(update_sheet3_combined)  # На минуту позже
+    schedule.every().day.at("00:20").do(process_sheet3, spreadsheet, token)  # На 2 минуты позже
     schedule.every().day.at("23:50").do(process_sheet5, spreadsheet, token)
 
-
     while True:
-        # Run pending tasks
         schedule.run_pending()
-        time.sleep(30)  # Wait a minute before checking again
+        time.sleep(30)
 
 
 def process_all_sheets():
