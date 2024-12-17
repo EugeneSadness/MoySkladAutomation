@@ -117,6 +117,7 @@ def process_sheet3(spreadsheet, token):
 def process_sheet5(worksheet, token):
     """Обрабатывает Лист5: обновляет статистику п�� заказам и остаткам по категориям"""
     try:
+        print("Обрабатывается Лист5")
         #update_daily_stats_in_sheet5_sliding_window(worksheet)
         status_channels = get_sales_channels_and_statuses(worksheet)
         orders_report = fetch_orders_by_channels(token, status_channels)
@@ -126,7 +127,7 @@ def process_sheet5(worksheet, token):
         update_categories_costs_in_sheet5(worksheet, categories_costs)
         transits_costs = fetch_stock_CHINA_in_transit(token)
         update_transits_costs_in_sheet5(worksheet, transits_costs)
-        print("Ли��т5 успешно обновлен")
+        print("Лиcт5 успешно обновлен")
     except Exception as e:
         print(f"Ошибка при обработке Лист5: {str(e)}")
         raise 
