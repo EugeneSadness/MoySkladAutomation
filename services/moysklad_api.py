@@ -547,11 +547,11 @@ def fetch_orders_by_channels(access_token: str, status_channels: Dict[str, List[
             print_api_errors(e.response)
             raise e
     
-    # Получаем остатки по категориям
-    categories_costs = fetch_categories_costs(access_token)
+    # # Получаем остатки по категориям
+    # categories_costs = fetch_categories_costs(access_token)
     
-    # Добавляем информацию об остатках в отчет
-    report["Остатки"] = categories_costs
+    # # Добавляем информацию об остатках в отчет
+    # report["Остатки"] = categories_costs
     
     # Удаляем временные ключи
     if "(Отменен)" in report:
