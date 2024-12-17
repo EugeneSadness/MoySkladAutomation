@@ -65,7 +65,7 @@ def process_sheet3(spreadsheet, token):
     """Об��абатывает данные приемок для Листа3 для будущих дат"""
     try:
         worksheet3 = spreadsheet.worksheet("Лист3")
-        sheet3_sliding_window(worksheet3)
+        #sheet3_sliding_window(worksheet3)
         supply_dates = get_supply_dates_from_sheet3(worksheet3)
         if not supply_dates:
             print("Нет данных для обработки будущих приемок")
@@ -117,6 +117,7 @@ def process_sheet3(spreadsheet, token):
 def process_sheet5(worksheet, token):
     """Обрабатывает Лист5: обновляет статистику п�� заказам и остаткам по категориям"""
     try:
+        #update_daily_stats_in_sheet5_sliding_window(worksheet)
         status_channels = get_sales_channels_and_statuses(worksheet)
         orders_report = fetch_orders_by_channels(token, status_channels)
         categories_costs = fetch_categories_costs(token)
