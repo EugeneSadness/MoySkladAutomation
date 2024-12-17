@@ -435,7 +435,7 @@ def generate_sales_report(access_token: str) -> Dict[str, Dict[str, Dict[str, fl
 def fetch_orders_by_channels(access_token: str, status_channels: Dict[str, List[str]]) -> Dict[str, Dict[str, Dict[str, float]]]:
     # Get purchase prices for all products
     purchase_prices = fetch_purchase_prices(access_token)
-    print("Loaded purchase prices:", purchase_prices)
+    print("Loaded purchase prices")
     
     # Initialize results structure
     report = {}

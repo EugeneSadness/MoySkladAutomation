@@ -115,7 +115,7 @@ def process_sheet3(spreadsheet, token):
         raise
 
 def process_sheet5(worksheet, token):
-    """Обрабатывает Лист5: обновляет статистику п�� заказам и остаткам по категориям"""
+    """Обрабатывает Лист5: обновляет статистику по заказам и остаткам по категориям"""
     try:
         print("Обрабатывается Лист5")
         #update_daily_stats_in_sheet5_sliding_window(worksheet)
