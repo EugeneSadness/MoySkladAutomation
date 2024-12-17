@@ -79,7 +79,7 @@ def fetch_customer_orders_for_products(access_token: str, start_date: str, end_d
     
     params = {
         "filter": f"moment>={start_date};moment<={end_date}",
-        "limit": 100,
+        "limit": 1000,
         "expand": "positions"
     }
     
@@ -158,24 +158,37 @@ def fetch_product_stock(access_token: str, product_codes: List[str]) -> Dict[str
     }
     
     params = {
-        "filter": f"store!={china_transit_url}"
+        "filter": f"store!={china_transit_url}",
+        "limit": 1000
     }
     
     stock_dict = {}
+    offset = 0
     
-    try:
-        response = requests.get(url, headers=headers, params=params)
-        response.raise_for_status()
-        data = response.json()
-        
-        for item in data.get("rows", []):
-            code = item.get("code")
-            if code in product_codes:
-                stock_dict[code] = float(item.get("stock", 0))
+    while True:
+        params['offset'] = offset
+        try:
+            response = requests.get(url, headers=headers, params=params)
+            response.raise_for_status()
+            data = response.json()
+            rows = data.get("rows", [])
+            
+            if not rows:
+                break
+            
+            for item in rows:
+                code = item.get("code")
+                if code in product_codes:
+                    stock_dict[code] = float(item.get("stock", 0))
+            
+            if len(rows) < params["limit"]:
+                break
                 
-    except requests.HTTPError as e:
-        print_api_errors(e.response)
-        raise e
+            offset += len(rows)
+                
+        except requests.HTTPError as e:
+            print_api_errors(e.response)
+            raise e
         
     return stock_dict 
 
@@ -200,7 +213,7 @@ def fetch_supplies_by_date_range(access_token: str, start_date: str) -> List[Dic
     
     params = {
         "filter": f"moment>{start_date} 00:00:00",
-        "limit": 100,
+        "limit": 1000,
         "expand": "positions",
         "filter": f"store!={china_transit_url}"
     }
@@ -259,7 +272,7 @@ def fetch_supplies_by_date_range(access_token: str, start_date: str) -> List[Dic
             raise e
         
         offset += len(supply_rows)
-        if len(supply_rows) < 100:
+        if len(supply_rows) < params["limit"]:
             break
     
     return supplies
@@ -589,11 +602,11 @@ def fetch_categories_costs(access_token: str) -> Dict[str, float]:
         "Accept-Encoding": "gzip"
     }
     
-    # Инициализируем словарь для хранения сумм по категориям
-    categories_total = {"Всего": 0.0}  # Только общая сумма изначально
+    categories_total = {"Всего": 0.0}
     
     offset = 0
     limit = 1000
+    total_records = None
     
     while True:
         params = {
@@ -608,30 +621,34 @@ def fetch_categories_costs(access_token: str) -> Dict[str, float]:
             response.raise_for_status()
             data = response.json()
             
+            # Получаем общее количество записей при первом запросе
+            if total_records is None:
+                total_records = data.get("meta", {}).get("size", 0)
+                print(f"Total records to process: {total_records}")
+            
             rows = data.get("rows", [])
             if not rows:
                 break
+            
+            print(f"Processing batch: {offset + 1}-{offset + len(rows)} of {total_records}")
                 
             for item in rows:
                 stock = float(item.get("stock", 0))
-                price = float(item.get("price", 0)) / 100  # Convert from kopeks to rubles
+                price = float(item.get("price", 0)) / 100
                 total_cost = stock * price
                 
-                # Получаем категорию товара
                 folder = item.get("folder", {})
                 category_name = folder.get("name", "Без категории") if folder else "Без категории"
                 
-                # Если категория встречается впервые, добавляем её в словарь
                 if category_name not in categories_total:
                     categories_total[category_name] = 0.0
                 
-                # Добавляем стоимость в соответствующую категорию
                 categories_total[category_name] += total_cost
-                    
-                # Добавляем в общую сумму
                 categories_total["Всего"] += total_cost
             
-            if len(rows) < limit:
+            # Проверяем, получены ли все записи
+            if offset + len(rows) >= total_records:
+                print("All records processed successfully")
                 break
                 
             offset += limit

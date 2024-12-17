@@ -56,11 +56,6 @@ def process_sheet2(spreadsheet, token):
         products = fetch_product_details_by_codes(token, product_codes, existing_products)
         update_product_details_in_sheet2(worksheet, products)
         print("New product details updated in Sheet2")
-        start_date, end_date = get_current_day_date_range()
-        orders_data = fetch_customer_orders_for_products(token, start_date, end_date, products)
-        print(f"Processed orders for {len(orders_data)} products")
-        update_daily_stats_in_sheet2(worksheet, orders_data)
-        print("Daily statistics updated in Sheet2")
     except Exception as e:
         print(f"Error processing Sheet2: {e}")
 
