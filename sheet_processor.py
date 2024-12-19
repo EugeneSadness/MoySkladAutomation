@@ -107,7 +107,7 @@ def process_sheet3(spreadsheet, token):
 
         if supplies_quantities:
             update_supply_quantities_in_sheet3(worksheet3, supplies_quantities)
-            print(f"Данные о будущих приемках обновлены в Лист3")
+            print(f"Данные о будущих прием��ах обновлены в Лист3")
         else:
             print("Нет данных о будущих приемках")
     except Exception as e:
@@ -136,22 +136,19 @@ def process_sheet5(worksheet, token):
 def schedule_process_sheets(spreadsheet, token):
     moscow_tz = pytz.timezone('Europe/Moscow')
 
-    def update_sheet3_combined():
-        """Вспомогательная функция для обновления Листа3 с комбинированными данными"""
+    def update_sheet3_products():
+        """Вспомогательная функция для обновления Листа3"""
         worksheet3 = spreadsheet.worksheet("Лист3")
-        combined_products = {
-            **get_products_with_details(spreadsheet.sheet1),
-            **get_products_with_details_sheet2(spreadsheet.worksheet("Лист2"))
-        }
-        update_sheet3(worksheet3, combined_products)
+        product_codes = [row[0] for row in worksheet3.get_all_values()[3:] if row[0].strip()]
+        products = fetch_product_details_by_codes(token, product_codes, {})
+        update_sheet3(worksheet3, products)
         print("Данные успешно записаны в Лист3.")
 
     # Schedule the tasks
     schedule.every().day.at("00:10").do(process_sheet1, spreadsheet, token)
     schedule.every().day.at("00:13").do(process_sheet2, spreadsheet, token)
-    # Добавляем обновление combined products после обновления листов 1 и 2
-    schedule.every().day.at("00:16").do(update_sheet3_combined)  # На минуту позже
-    schedule.every().day.at("00:20").do(process_sheet3, spreadsheet, token)  # На 2 минуты позже
+    schedule.every().day.at("00:16").do(update_sheet3_products)
+    schedule.every().day.at("00:20").do(process_sheet3, spreadsheet, token)
     schedule.every().day.at("23:50").do(process_sheet5, spreadsheet, token)
 
     while True:
@@ -165,7 +162,8 @@ def process_all_sheets():
         spreadsheet = client.open(config.SHEET_NAME)
 
         # Get MoySklad token
-        token = "6e54a61cf2e5bf885f343424ecc6facb267472c4"
+        #token = "6e54a61cf2e5bf885f343424ecc6facb267472c4"
+        token = get_access_token(config.MS_USERNAME, config.MS_PASSWORD)
         print("Access Token:", token)
 
         # Process Sheet1
@@ -181,11 +179,14 @@ def process_all_sheets():
             worksheet3 = spreadsheet.add_worksheet(title="Лист3", rows="1000", cols="3")
             print("Лист3 создан.")
 
-        # Объединяем продукты из Sheet1 и Sheet2
-        combined_products = {**get_products_with_details(spreadsheet.sheet1), **get_products_with_details_sheet2(spreadsheet.worksheet("Лист2"))}
-
-        # Обновляем Лист3
-        update_sheet3(worksheet3, combined_products)
+        # Get product codes directly from Sheet3
+        product_codes = [row[0] for row in worksheet3.get_all_values()[3:] if row[0].strip()]
+        
+        # Fetch product details from MoySklad
+        products = fetch_product_details_by_codes(token, product_codes, {})
+        
+        # Update Sheet3 with fetched product details
+        update_sheet3(worksheet3, products)
         print("Данные успешно записаны в Лист3.")
 
         # Process Sheet3
@@ -207,4 +208,4 @@ def process_all_sheets():
     
     except Exception as e:
         print(f"Error occurred: {e}")
-        return None 
+        return None

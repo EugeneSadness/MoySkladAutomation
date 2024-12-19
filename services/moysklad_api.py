@@ -435,7 +435,7 @@ def generate_sales_report(access_token: str) -> Dict[str, Dict[str, Dict[str, fl
 def fetch_orders_by_channels(access_token: str, status_channels: Dict[str, List[str]]) -> Dict[str, Dict[str, Dict[str, float]]]:
     # Get purchase prices for all products
     purchase_prices = fetch_purchase_prices(access_token)
-    print("Loaded purchase prices")
+    print("Loaded purchase prices:", purchase_prices)
     
     # Initialize results structure
     report = {}
@@ -497,6 +497,7 @@ def fetch_orders_by_channels(access_token: str, status_channels: Dict[str, List[
                     state_cache[state_href] = state_data.get('name', '')
                 
                 state_name = state_cache.get(state_href, '')
+                print(state_name)
                 sheet_state_name = f"({state_name})"
                 
                 # Get channel name
@@ -558,11 +559,14 @@ def fetch_orders_by_channels(access_token: str, status_channels: Dict[str, List[
         del report["(Отменен)"]
     if "(Возврат)" in report:
         del report["(Возврат)"]
+    print("report: ",report)
 
     return report
 
 def calculate_order_total(order, headers, product_cache, purchase_prices):
-    """Helper function to calculate order total"""
+    """
+    Calculate order total considering both products and bundles
+    """
     order_total = 0.0
     positions_meta = order.get("positions", {}).get("meta", {})
     positions_href = positions_meta.get("href")
@@ -573,22 +577,52 @@ def calculate_order_total(order, headers, product_cache, purchase_prices):
         positions = positions_response.json().get("rows", [])
         
         for position in positions:
-            product_href = position.get("assortment", {}).get("meta", {}).get("href")
+            assortment = position.get("assortment", {})
+            assortment_meta = assortment.get("meta", {})
+            assortment_type = assortment_meta.get("type")
+            assortment_href = assortment_meta.get("href")
+            quantity = float(position.get("quantity", 0))
             
-            if product_href not in product_cache:
-                product_response = requests.get(product_href, headers=headers)
-                product_response.raise_for_status()
-                product_data = product_response.json()
-                product_cache[product_href] = product_data.get("code")
+            if assortment_type == "product":
+                # Handle regular product
+                if assortment_href not in product_cache:
+                    product_response = requests.get(assortment_href, headers=headers)
+                    product_response.raise_for_status()
+                    product_data = product_response.json()
+                    product_cache[assortment_href] = product_data.get("code")
                 
-            product_code = product_cache[product_href]
-            
-            if product_code:
-                quantity = float(position.get("quantity", 0))
-                buy_price = purchase_prices.get(product_code, 0.0)
-                position_cost = buy_price * quantity
-                order_total += position_cost
-    
+                product_code = product_cache[assortment_href]
+                if product_code:
+                    buy_price = purchase_prices.get(product_code, 0.0)
+                    position_cost = buy_price * quantity
+                    order_total += position_cost
+                    
+            elif assortment_type == "bundle":
+                # Handle bundle
+                bundle_response = requests.get(f"{assortment_href}/components", headers=headers)
+                bundle_response.raise_for_status()
+                components = bundle_response.json().get("rows", [])
+                
+                bundle_cost = 0.0
+                for component in components:
+                    component_assortment = component.get("assortment", {})
+                    component_href = component_assortment.get("meta", {}).get("href")
+                    component_quantity = float(component.get("quantity", 0))
+                    
+                    if component_href not in product_cache:
+                        component_response = requests.get(component_href, headers=headers)
+                        component_response.raise_for_status()
+                        component_data = component_response.json()
+                        product_cache[component_href] = component_data.get("code")
+                    
+                    component_code = product_cache[component_href]
+                    if component_code:
+                        component_price = purchase_prices.get(component_code, 0.0)
+                        bundle_cost += component_price * component_quantity
+                
+                order_total += bundle_cost * quantity
+
+    print("order total: ", order_total)
     return order_total
 
 def fetch_categories_costs(access_token: str) -> Dict[str, float]:
