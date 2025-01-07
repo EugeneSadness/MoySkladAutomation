@@ -14,7 +14,7 @@ def get_column_letter(column_number):
 
 def get_product_codes_from_sheet(worksheet) -> List[str]:
     codes = worksheet.col_values(1)
-    return [code for code in codes[5:] if code.strip()] 
+    return [code for code in codes[6:] if code.strip()]
 
 def get_products_with_details(worksheet, start_row: int = 6) -> Dict[str, Dict]:
     """

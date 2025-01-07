@@ -62,7 +62,7 @@ def process_sheet2(spreadsheet, token):
 
 
 def process_sheet3(spreadsheet, token):
-    """Об��абатывает данные приемок для Листа3 для будущих дат"""
+    """Обрабатывает данные приемок для Листа3 для будущих дат"""
     try:
         worksheet3 = spreadsheet.worksheet("Лист3")
         #sheet3_sliding_window(worksheet3)
