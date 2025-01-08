@@ -790,7 +790,8 @@ def fetch_categories_costs(access_token: str) -> Dict[str, float]:
                     categories_total[category_path_name] = 0.0
                 
                 categories_total[category_name] += total_cost
-                categories_total[category_path_name] += total_cost
+                if category_name != category_path_name:
+                    categories_total[category_path_name] += total_cost
                 categories_total["Всего"] += total_cost
             
             # Проверяем, получены ли все записи
