@@ -71,6 +71,7 @@ def process_sheet3(spreadsheet, token):
             print("Нет данных для обработки будущих приемок")
             return
         current_date = datetime.now().strftime("%Y-%m-%d")
+        print(current_date)
 
         # Fetch supplies
         supplies = fetch_supplies_by_date_range(token, current_date)
@@ -107,7 +108,7 @@ def process_sheet3(spreadsheet, token):
 
         if supplies_quantities:
             update_supply_quantities_in_sheet3(worksheet3, supplies_quantities)
-            print(f"Данные о будущих прием��ах обновлены в Лист3")
+            print(f"Данные о будущих приемках обновлены в Лист3")
         else:
             print("Нет данных о будущих приемках")
     except Exception as e:
@@ -162,8 +163,8 @@ def process_all_sheets():
         spreadsheet = client.open(config.SHEET_NAME)
 
         # Get MoySklad token
-        #token = "6e54a61cf2e5bf885f343424ecc6facb267472c4"
-        token = get_access_token(config.MS_USERNAME, config.MS_PASSWORD)
+        token = "6e54a61cf2e5bf885f343424ecc6facb267472c4"
+        #token = get_access_token(config.MS_USERNAME, config.MS_PASSWORD)
         print("Access Token:", token)
 
         # Process Sheet1

@@ -14,7 +14,7 @@ def get_column_letter(column_number):
 
 def get_product_codes_from_sheet(worksheet) -> List[str]:
     codes = worksheet.col_values(1)
-    return [code for code in codes[6:] if code.strip()]
+    return [code for code in codes[5:] if code.strip()]
 
 def get_products_with_details(worksheet, start_row: int = 6) -> Dict[str, Dict]:
     """
@@ -104,21 +104,22 @@ def update_daily_stats_in_sheet(worksheet, orders_data: List[Dict], max_days: in
         # Обрабатываем заголовки
         headers_update = header_row[stats_start_col-1:]  # Получаем все заголовки начиная с E
         if dates:  # Если есть существующие даты
-            # Сдвигаем заголовки влево и добавляем новые
-            headers_update = headers_update[2:] + ['Ост', current_date]
+            # # Закомментированная часть со сдвигом заголовков
+            # headers_update = headers_update[2:] + ['Ост', current_date]
             
             # Обрабатываем данные для каждой строки
             for row_idx, row in enumerate(all_data[5:], start=6):  # Начинаем с 6-й строки
                 row_data = row[stats_start_col-1:]  # Получаем данные начиная с колонки E
-                # Сдвигаем данные влево и добавляем новые значения
+                # # Закомментированная часть со сдвигом данных
+                # row_data = row_data[2:] + [
                 product_idx = row_idx - 6
                 if product_idx < len(orders_data):
-                    row_data = row_data[2:] + [
+                    row_data = [
                         str(int(orders_data[product_idx].get('stock', 0))),
                         str(int(orders_data[product_idx].get('orders_count', 0)))
                     ]
                 else:
-                    row_data = row_data[2:] + ['', '']
+                    row_data = ['', '']
                 
                 # Добавляем обновление для этой строки
                 range_name = f'{get_column_letter(stats_start_col)}{row_idx}:{get_column_letter(stats_start_col + len(row_data) - 1)}{row_idx}'
@@ -127,15 +128,16 @@ def update_daily_stats_in_sheet(worksheet, orders_data: List[Dict], max_days: in
                     'values': [row_data]
                 })
         
-        # Обновляем заголовки
-        header_range = f'{get_column_letter(stats_start_col)}5:{get_column_letter(stats_start_col + len(headers_update) - 1)}5'
-        updates.insert(0, {
-            'range': header_range,
-            'values': [headers_update]
-        })
+        # # Закомментированное обновление заголовков
+        # header_range = f'{get_column_letter(stats_start_col)}5:{get_column_letter(stats_start_col + len(headers_update) - 1)}5'
+        # updates.insert(0, {
+        #     'range': header_range,
+        #     'values': [headers_update]
+        # })
         
         # Выполняем batch-обновление
-        worksheet.batch_update(updates)
+        if updates:
+            worksheet.batch_update(updates)
 
 def get_product_codes_from_sheet2(worksheet) -> List[str]:
     """Gets product codes from Sheet2 starting from C4"""
@@ -322,7 +324,7 @@ def get_column_number(column_letter: str) -> int:
 
 def get_supply_dates_from_sheet3(worksheet) -> Dict[str, List[str]]:
     """
-    Получает вс�� будущие даты приемок из Листа3.
+    Получает все будущие даты приемок из Листа3.
     
     Returns:
         Dict[str, List[str]]: {код_товара: [будущие_даты]}
@@ -434,8 +436,8 @@ def update_supply_quantities_in_sheet3(worksheet, supplies_data: Dict[str, Dict[
     
     # Очищаем только данные о заказах, сохраняя даты
     # Начинаем с E4 (пропускаем заголовки и даты)
-    clear_range = f'E4:{get_column_letter(worksheet.col_count)}{len(all_values)}'
-    worksheet.batch_clear([clear_range])
+    # clear_range = f'E4:{get_column_letter(worksheet.col_count)}{len(all_values)}'
+    # worksheet.batch_clear([clear_range])
     
     # Получаем все уникальные даты из supplies_data и сортируем их
     all_dates = set()
@@ -459,10 +461,22 @@ def update_supply_quantities_in_sheet3(worksheet, supplies_data: Dict[str, Dict[
             for date_str, quantity in product_dates.items():
                 if date_str in date_to_column:
                     column_letter = date_to_column[date_str]
+                    col_idx = ord(column_letter) - ord('A')
+                    
+                    # Получаем текущее значение из ячейки
+                    current_value = row[col_idx] if col_idx < len(row) else "0"
+                    try:
+                        current_value = float(current_value) if current_value.strip() else 0
+                    except (ValueError, AttributeError):
+                        current_value = 0
+                    
+                    # Добавляем новое значение к существующему
+                    new_value = current_value + quantity
+                    
                     cell = f"{column_letter}{row_idx}"
                     value_updates.append({
                         'range': cell,
-                        'values': [[quantity]]
+                        'values': [[new_value]]
                     })
     
     # Применяем обновления батчем

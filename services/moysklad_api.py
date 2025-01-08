@@ -30,21 +30,23 @@ def fetch_products_by_codes(access_token: str, product_codes: List[str]) -> List
 
 def fetch_product_details_by_codes(access_token: str, product_codes: List[str], existing_products: Dict[str, Dict]) -> Dict[str, Dict]:
     """
-    Получает информацию только о новых товарах.
+    Получает информацию о товарах и комплектах.
     """
-    # Фием коды товаров, оставляя только те, для которых нет информации
+    # Фильтруем коды, оставляя только те, для которых нет информации
     new_codes = [code for code in product_codes if code not in existing_products]
     
     if not new_codes:
         return existing_products
     
+    products_dict = existing_products.copy()
+    not_found_codes = []  # Коды, которые не найдены среди товаров
+    
+    # Сначала ищем среди товаров
     url = "https://api.moysklad.ru/api/remap/1.2/entity/product"
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Accept-Encoding": "gzip"
     }
-    
-    products_dict = existing_products.copy()
     
     for code in new_codes:
         try:
@@ -58,14 +60,47 @@ def fetch_product_details_by_codes(access_token: str, product_codes: List[str], 
                 products_dict[code] = {
                     "id": product.get("id"),
                     "name": product.get("name"),
-                    "category": product.get("productFolder", {}).get("name", "Без категории"),
+                    "category": product.get("pathName", "Без категории"),
                     "description": product.get("description", ""),
                     "article": product.get("article", ""),
-                    "meta": product.get("meta")
+                    "meta": product.get("meta"),
+                    "type": "product"  # Добавляем тип для различения
                 }
+            else:
+                not_found_codes.append(code)
         except requests.HTTPError as e:
             print_api_errors(e.response)
-            raise e
+            not_found_codes.append(code)
+            continue
+    
+    # Если остались ненайденные коды, ищем их среди комплектов
+    if not_found_codes:
+        bundle_url = "https://api.moysklad.ru/api/remap/1.2/entity/bundle"
+        
+        for code in not_found_codes:
+            try:
+                params = {"filter": f"code={code}"}
+                response = requests.get(bundle_url, headers=headers, params=params)
+                response.raise_for_status()
+                data = response.json()
+                
+                if data.get("rows"):
+                    bundle = data["rows"][0]
+                    products_dict[code] = {
+                        "id": bundle.get("code"),
+                        "name": bundle.get("name"),
+                        "category": bundle.get("pathName", "Без категории"),
+                        "description": bundle.get("description", ""),
+                        "article": bundle.get("article", ""),
+                        "meta": bundle.get("meta"),
+                        "type": "bundle"  # Добавляем тип для различения
+                    }
+                else:
+                    print(f"Code {code} not found in both products and bundles")
+            except requests.HTTPError as e:
+                print_api_errors(e.response)
+                print(f"Error fetching bundle with code {code}")
+                continue
     
     return products_dict
 
@@ -98,9 +133,14 @@ def fetch_customer_orders_for_products(access_token: str, start_date: str, end_d
                 break
             
             for order in orders:
-                positions = order.get("positions", {}).get("rows", [])
-                
-                for position in positions:
+                positions = order.get("positions", {})
+                positions_href = positions.get("meta", {}).get("href")
+                positions_response = requests.get(positions_href, headers=headers)
+                positions_response.raise_for_status()
+                positions_data = positions_response.json()
+                positions_rows = positions_data.get("rows", [])
+
+                for position in positions_rows:
                     assortment = position.get("assortment", {})
                     product_href = assortment.get("meta", {}).get("href")
                     
@@ -136,6 +176,7 @@ def fetch_customer_orders_for_products(access_token: str, start_date: str, end_d
             "orders_count": int(stats["count"]),
             "stock": stocks.get(code, 0)
         })
+        print(result)
     
     return result 
 
@@ -212,10 +253,9 @@ def fetch_supplies_by_date_range(access_token: str, start_date: str) -> List[Dic
     }
     
     params = {
-        "filter": f"moment>{start_date} 00:00:00",
+        "filter": f"moment>{start_date} 00:00:00;store!={china_transit_url}",
         "limit": 1000,
-        "expand": "positions",
-        "filter": f"store!={china_transit_url}"
+        #"expand": "positions",
     }
     
     supplies = []
@@ -234,11 +274,21 @@ def fetch_supplies_by_date_range(access_token: str, start_date: str) -> List[Dic
                 break
                 
             for supply in supply_rows:
-                positions = supply.get("positions", {}).get("rows", [])
+                positions = supply.get("positions", {})
+                positions_href = positions.get("meta", {}).get("href")
+                positions_response = requests.get(positions_href, headers=headers)
+                positions_response.raise_for_status()
+                positions_data = positions_response.json()
+                positions_rows = positions_data.get("rows", [])
                 supply_positions = []
                 
-                for position in positions:
-                    assortment = position.get("assortment", {})
+                for position in positions_rows:
+                    print(position)
+                    position_href = position.get("meta", {}).get("href")
+                    position_response = requests.get(position_href, headers=headers)
+                    position_response.raise_for_status()
+                    position_data = position_response.json()
+                    assortment = position_data.get("assortment", {})
                     product_href = assortment.get("meta", {}).get("href")
                     
                     # Получаем информацию о товаре из кэша или через API
@@ -246,10 +296,11 @@ def fetch_supplies_by_date_range(access_token: str, start_date: str) -> List[Dic
                         product_response = requests.get(product_href, headers=headers)
                         product_response.raise_for_status()
                         product_data = product_response.json()
+                        print(product_data)
                         product_cache[product_href] = {
                             "code": product_data.get("code"),
                             "name": product_data.get("name"),
-                            "category": product_data.get("productFolder", {}).get("name", "Uncategorized")
+                            "category": product_data.get("pathName", "Uncategorized")
                         }
                     
                     product_info = product_cache[product_href]
@@ -464,7 +515,8 @@ def fetch_orders_by_channels(access_token: str, status_channels: Dict[str, List[
     end_date = today + timedelta(days=180)
     
     params = {
-        "filter": f"moment>={today.strftime('%Y-%m-%d')} 00:00:00;moment<={end_date.strftime('%Y-%m-%d')} 23:59:59",
+        "filter": f"moment>={today.strftime('%Y-%m-%d')} 00:00:00",
+        #"filter": f"moment>={today.strftime('%Y-%m-%d')} 00:00:00;moment<={end_date.strftime('%Y-%m-%d')} 23:59:59",
         "limit": 1000,
         "expand": "positions,salesChannel,state"
     }
@@ -577,7 +629,7 @@ def get_product_stock_cost(product_href, headers):
         data = response.json()
         rows = data.get("rows", [])
         if rows:
-            return rows[0].get("price", 0.0)*0.01
+            return rows[0].get("price", 0.0)/100
         else:
             return 0.0
     else:
@@ -655,7 +707,7 @@ def calculate_order_total(order, headers, product_cache):
                         continue
                 
                 buy_price = get_product_stock_cost(assortment_href, headers)
-                order_total += buy_price 
+                order_total += buy_price *quantity
                     
             elif assortment_type == "bundle":
 
@@ -672,7 +724,7 @@ def calculate_order_total(order, headers, product_cache):
 
                 # Handle bundle
                 bundle_cost = get_bundle_composition_cost(assortment_href, headers)
-                order_total += bundle_cost 
+                order_total += bundle_cost * quantity
                 
     except Exception as e:
         print(f"Error processing positions: {e}")
@@ -729,11 +781,16 @@ def fetch_categories_costs(access_token: str) -> Dict[str, float]:
                 
                 folder = item.get("folder", {})
                 category_name = folder.get("name", "Без категории") if folder else "Без категории"
+                category_path_name = folder.get("pathName", category_name) if folder else category_name
                 
                 if category_name not in categories_total:
                     categories_total[category_name] = 0.0
+
+                if category_path_name not in categories_total:
+                    categories_total[category_path_name] = 0.0
                 
                 categories_total[category_name] += total_cost
+                categories_total[category_path_name] += total_cost
                 categories_total["Всего"] += total_cost
             
             # Проверяем, получены ли все записи
