@@ -163,8 +163,7 @@ def process_all_sheets():
         spreadsheet = client.open(config.SHEET_NAME)
 
         # Get MoySklad token
-        token = "6e54a61cf2e5bf885f343424ecc6facb267472c4"
-        #token = get_access_token(config.MS_USERNAME, config.MS_PASSWORD)
+        token = config.MOYSKLAD_TOKEN
         print("Access Token:", token)
 
         #Process Sheet1
