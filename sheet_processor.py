@@ -121,9 +121,9 @@ def process_sheet5(worksheet, token):
         print("Обрабатывается Лист5")
         #update_daily_stats_in_sheet5_sliding_window(worksheet)
         current_date = datetime.now().strftime("%d.%m.%Y")
-        status_channels = get_sales_channels_and_statuses(worksheet)
-        orders_report = calculate_costs_by_status_and_channel(token, status_channels)
-        update_sales_report_in_sheet5(worksheet, orders_report, current_date)
+        #status_channels = get_sales_channels_and_statuses(worksheet)
+        #orders_report = fetch_orders_by_channels(token, status_channels)
+        #update_sales_report_in_sheet5(worksheet, orders_report, current_date)
         categories_costs = fetch_categories_costs(token)
         update_categories_costs_in_sheet5(worksheet, categories_costs)
         transits_costs = fetch_stock_CHINA_in_transit(token)
@@ -168,30 +168,30 @@ def process_all_sheets():
         print("Access Token:", token)
 
         #Process Sheet1
-        # process_sheet1(spreadsheet, token)
+        process_sheet1(spreadsheet, token)
 
-        # # Process Sheet2
-        # process_sheet2(spreadsheet, token)
+        # Process Sheet2
+        process_sheet2(spreadsheet, token)
 
-        # # Обработка данных для Листа3
-        # try:
-        #     worksheet3 = spreadsheet.worksheet("Лист3")
-        # except gspread.WorksheetNotFound:
-        #     worksheet3 = spreadsheet.add_worksheet(title="Лист3", rows="1000", cols="3")
-        #     print("Лист3 создан.")
+        #Обработка данных для Листа3
+        try:
+            worksheet3 = spreadsheet.worksheet("Лист3")
+        except gspread.WorksheetNotFound:
+            worksheet3 = spreadsheet.add_worksheet(title="Лист3", rows="1000", cols="3")
+            print("Лист3 создан.")
 
-        # # Get product codes directly from Sheet3
-        # product_codes = [row[0] for row in worksheet3.get_all_values()[3:] if row[0].strip()]
+        # Get product codes directly from Sheet3
+        product_codes = [row[0] for row in worksheet3.get_all_values()[3:] if row[0].strip()]
         
-        # # Fetch product details from MoySklad
-        # products = fetch_product_details_by_codes(token, product_codes, {})
+        # Fetch product details from MoySklad
+        products = fetch_product_details_by_codes(token, product_codes, {})
         
-        # # Update Sheet3 with fetched product details
-        # update_sheet3(worksheet3, products)
-        # print("Данные успешно записаны в Лист3.")
+        # Update Sheet3 with fetched product details
+        update_sheet3(worksheet3, products)
+        print("Данные успешно записаны в Лист3.")
 
-        # # Process Sheet3
-        # process_sheet3(spreadsheet, token)
+        # Process Sheet3
+        process_sheet3(spreadsheet, token)
 
         #Process Sheet5
         try:

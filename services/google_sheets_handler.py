@@ -362,7 +362,7 @@ def get_supply_dates_from_sheet3(worksheet) -> Dict[str, List[str]]:
     
     return product_supplies
 
-def sheet3_sliding_window(worksheet, num_dates: int = 90):
+def sheet3_sliding_window(worksheet, num_dates: int = 180):
     """
     Сдвигает все колонки влево в Sheet5, удаляя крайнюю левую дату и добавляя новую дату справа.
     Ближайшая дата всегда слева, дальняя справа.
@@ -619,23 +619,21 @@ def update_categories_costs_in_sheet5(worksheet, categories_costs: Dict[str, flo
     else:
         date_col = date_cols[dates.index(current_date)]
 
-    # Находим строку со спец. знаком '\'
+    # Находим строку с "Остатки"
     col_a_values = worksheet.col_values(1)
     try:
-        separator_row = col_a_values.index('\\') + 1
+        start_row = col_a_values.index('Остатки') + 1
     except ValueError:
-        print("Специальный знак '\\' не найден в столбце A")
+        print("Название 'Остатки' не найдено в столбце A")
         return
 
-    # Пропускаем строку "Остатки"
-    start_row = separator_row + 2
-
-    # Получаем все категории из столбца A после заголовка "Остатки"
+    # Получаем все категории из столбца A до строки "Заказано В пути", игнорируя строки со знаком #
     categories_in_sheet = []
     for cell in col_a_values[start_row:]:
-        if not cell.strip():
+        if cell.strip() == "Заказано В пути":
             break
-        categories_in_sheet.append(cell.strip())
+        if cell.strip() and not cell.startswith('#'):
+            categories_in_sheet.append(cell.strip())
 
     # Подготавливаем обновления
     updates = []
@@ -685,23 +683,21 @@ def update_transits_costs_in_sheet5(worksheet, categories_costs: Dict[str, float
     else:
         date_col = date_cols[dates.index(current_date)]
 
-    # Находим строку со спец. знаком '/'
+    # Находим строку с "Заказано В пути"
     col_a_values = worksheet.col_values(1)
     try:
-        separator_row = col_a_values.index('/') + 1
+        start_row = col_a_values.index('Заказано В пути') + 1
     except ValueError:
-        print("Специальный знак '/' не найден в столбце A")
+        print("Название 'Заказано В пути' не найдено в столбце A")
         return
 
-    # Пропускаем строку "В пути"
-    start_row = separator_row + 2
-
-    # Получаем все категории из столбца A после заголовка "В пути"
+    # Получаем все категории из столбца A после строки "Заказано В пути", игнорируя строки со знаком #
     categories_in_sheet = []
     for cell in col_a_values[start_row:]:
         if not cell.strip():
             break
-        categories_in_sheet.append(cell.strip())
+        if cell.strip() and not cell.startswith('#'):
+            categories_in_sheet.append(cell.strip())
 
     # Подготавливаем обновления
     updates = []

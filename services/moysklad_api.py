@@ -502,7 +502,7 @@ def fetch_orders_by_channels(access_token: str, status_channels: Dict[str, List[
     }
     
     today = datetime.now()
-    end_date = today - timedelta(days=30)
+    end_date = today - timedelta(days=90)
     
     params = {
         "filter": f"moment<={today.strftime('%Y-%m-%d')} 00:00:00;moment>={end_date.strftime('%Y-%m-%d')} 23:59:59",
@@ -535,6 +535,7 @@ def fetch_orders_by_channels(access_token: str, status_channels: Dict[str, List[
                             product_hrefs.add(component_href)  # Очищаем href перед добавлением
             # Получаем себестоимость всех товаров одним запросом
             costs_cache = get_products_stock_costs(list(product_hrefs), access_token)
+            print(f"cost_caches : {costs_cache}")
                 
             for order in orders:
                 order_date = datetime.fromisoformat(order.get('moment', '').replace('Z', '+00:00'))
@@ -560,7 +561,7 @@ def fetch_orders_by_channels(access_token: str, status_channels: Dict[str, List[
                 else:
                     if sheet_state_name in report and channel_name in report[sheet_state_name]:
                         order_total = int(calculate_order_totals(order, costs_cache))
-                        print(f"order total - {order_total}")
+                        #print(f"order total - {order_total}")
                         
                         if order_total > 0:
                             report[sheet_state_name][channel_name][order_date_str] = \
@@ -579,8 +580,6 @@ def fetch_orders_by_channels(access_token: str, status_channels: Dict[str, List[
 
     current_date = datetime.now().strftime("%d.%m.%Y")
     summarized_report = summarize_orders(report, current_date)
-    print("summarized_report")
-    print(summarized_report)
 
     return report
 
@@ -640,10 +639,11 @@ def calculate_order_totals(order, costs_cache: Dict[str, float]):
         quantity = position.get("quantity", 0)
         
         if assortment_type == "product":
-            product_href = assortment.get("meta", {}).get("href")
+            product_href = clean_href(assortment.get("meta", {}).get("href"))
             buy_price = costs_cache.get(product_href, 0.0)
+            #print(f"Product href: {product_href}, Buy price: {buy_price}, Quantity: {quantity}")
             order_total += buy_price * quantity
-            print(f"product cost = {order_total}")
+            #print(f"Product cost = {order_total}")
                 
         elif assortment_type == "bundle":
             components = assortment.get("components", {}).get("rows", [])
@@ -651,8 +651,9 @@ def calculate_order_totals(order, costs_cache: Dict[str, float]):
             
             for component in components:
                 comp_quantity = component.get("quantity", 1)
-                product_href = component.get("assortment", {}).get("meta", {}).get("href")
+                product_href = clean_href(component.get("assortment", {}).get("meta", {}).get("href"))
                 buy_price = costs_cache.get(product_href, 0.0)
+                #print(f"Component href: {product_href}, Buy price: {buy_price}, Component quantity: {comp_quantity}")
                 bundle_cost += buy_price * comp_quantity
             
             order_total += bundle_cost * quantity
@@ -661,45 +662,48 @@ def calculate_order_totals(order, costs_cache: Dict[str, float]):
 
 def summarize_orders(report: Dict[str, Dict[str, Dict[str, float]]], current_date: str) -> Dict[str, Dict[str, Dict[str, float]]]:
     """
-    Summarizes the order prices for each channel and status over the last three months for each date in the last 30 days.
+    Summarizes the order prices for each channel and status for the current day over the last three months.
     
     Args:
         report: The original report containing order prices.
         current_date: The current date in the format "dd.mm.yyyy".
     
     Returns:
-        A new report with summed prices for each channel and status for each date in the last 30 days.
+        A new report with summed prices for each channel and status for the current day over the last three months.
     """
     # Convert current_date to a datetime object
     current_date_obj = datetime.strptime(current_date, "%d.%m.%Y")
-    thirty_days_ago = current_date_obj - timedelta(days=30)
+    three_months_ago = current_date_obj - timedelta(days=90)
 
     # Initialize a new report for summarized data
     summarized_report = {}
 
-    # Iterate through each date in the last 30 days
-    for i in range(30):
-        date_to_check = current_date_obj - timedelta(days=i)
-        date_str = date_to_check.strftime("%d.%m.%Y")
-        three_months_ago = date_to_check - timedelta(days=90)
+    # Initialize the report for the current date
+    date_str = current_date_obj.strftime("%d.%m.%Y")
+    summarized_report[date_str] = {}
 
-        # Initialize the report for this specific date
-        summarized_report[date_str] = {}
+    # Debug: Check the contents of the report
+    print(f"Initial report data: {report}")  # Debug message
 
-        for status, channels in report.items():
-            for channel, date_amounts in channels.items():
-                # Initialize the channel and status in the summarized report
-                if status not in summarized_report[date_str]:
-                    summarized_report[date_str][status] = {}
-                if channel not in summarized_report[date_str][status]:
-                    summarized_report[date_str][status][channel] = 0.0
+    for status, channels in report.items():
+        print(f"Processing status: {status}")  # Debug message
+        for channel, date_amounts in channels.items():
+            print(f"Processing channel: {channel}")  # Debug message
+            # Initialize the channel and status in the summarized report
+            if status not in summarized_report[date_str]:
+                summarized_report[date_str][status] = {}
+            if channel not in summarized_report[date_str][status]:
+                summarized_report[date_str][status][channel] = 0.0
 
-                # Sum the amounts for the last three months up to the current date
-                for order_date_str, amount in date_amounts.items():
-                    order_date_obj = datetime.strptime(order_date_str, "%d.%m.%Y")
-                    if three_months_ago <= order_date_obj <= date_to_check:
-                        summarized_report[date_str][status][channel] += amount
+            # Sum the amounts for the current day over the last three months
+            for order_date_str, amount in date_amounts.items():
+                order_date_obj = datetime.strptime(order_date_str, "%d.%m.%Y")
+                # Check if the order date is within the last three months
+                if three_months_ago <= order_date_obj <= current_date_obj:
+                    summarized_report[date_str][status][channel] += amount
+                    print(f"Adding {amount} to {status} for {channel} on {date_str}")  # Debug message
 
+    print(f"Summarized report: {summarized_report}")  # Debug message
     return summarized_report
 
 def calculate_order_total(order, access_token: str):
