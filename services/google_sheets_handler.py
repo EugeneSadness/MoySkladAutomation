@@ -104,22 +104,21 @@ def update_daily_stats_in_sheet(worksheet, orders_data: List[Dict], max_days: in
         # Обрабатываем заголовки
         headers_update = header_row[stats_start_col-1:]  # Получаем все заголовки начиная с E
         if dates:  # Если есть существующие даты
-            # # Закомментированная часть со сдвигом заголовков
-            # headers_update = headers_update[2:] + ['Ост', current_date]
+            # Закомментированная часть со сдвигом заголовков
+            headers_update = headers_update[2:] + ['Ост', current_date]
             
             # Обрабатываем данные для каждой строки
             for row_idx, row in enumerate(all_data[5:], start=6):  # Начинаем с 6-й строки
                 row_data = row[stats_start_col-1:]  # Получаем данные начиная с колонки E
-                # # Закомментированная часть со сдвигом данных
-                # row_data = row_data[2:] + [
+                # Сдвигаем данные влево и добавляем новые значения
                 product_idx = row_idx - 6
                 if product_idx < len(orders_data):
-                    row_data = [
+                    row_data = row_data[2:] + [
                         str(int(orders_data[product_idx].get('stock', 0))),
                         str(int(orders_data[product_idx].get('orders_count', 0)))
                     ]
                 else:
-                    row_data = ['', '']
+                    row_data = row_data[2:] + ['', '']
                 
                 # Добавляем обновление для этой строки
                 range_name = f'{get_column_letter(stats_start_col)}{row_idx}:{get_column_letter(stats_start_col + len(row_data) - 1)}{row_idx}'
@@ -128,12 +127,12 @@ def update_daily_stats_in_sheet(worksheet, orders_data: List[Dict], max_days: in
                     'values': [row_data]
                 })
         
-        # # Закомментированное обновление заголовков
-        # header_range = f'{get_column_letter(stats_start_col)}5:{get_column_letter(stats_start_col + len(headers_update) - 1)}5'
-        # updates.insert(0, {
-        #     'range': header_range,
-        #     'values': [headers_update]
-        # })
+        # Закомментированное обновление заголовков
+        header_range = f'{get_column_letter(stats_start_col)}5:{get_column_letter(stats_start_col + len(headers_update) - 1)}5'
+        updates.insert(0, {
+            'range': header_range,
+            'values': [headers_update]
+        })
         
         # Выполняем batch-обновление
         if updates:

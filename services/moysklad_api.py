@@ -484,10 +484,6 @@ def generate_sales_report(access_token: str) -> Dict[str, Dict[str, Dict[str, fl
     return report
 
 def fetch_orders_by_channels(access_token: str, status_channels: Dict[str, List[str]]) -> Dict[str, Dict[str, Dict[str, float]]]:
-    # Get purchase prices for all products
-    #purchase_prices = fetch_purchase_prices(access_token)
-    #print("Loaded purchase prices:", purchase_prices)
-    
     # Initialize results structure
     report = {}
     for status, channels in status_channels.items():
@@ -498,11 +494,6 @@ def fetch_orders_by_channels(access_token: str, status_channels: Dict[str, List[
         else:
             report[status] = {channel: {} for channel in channels}
 
-    # Initialize caches
-    product_cache = {}
-    state_cache = {}
-    channel_cache = {}
-    
     # Prepare API request
     url = "https://api.moysklad.ru/api/remap/1.2/entity/customerorder"
     headers = {
@@ -510,18 +501,15 @@ def fetch_orders_by_channels(access_token: str, status_channels: Dict[str, List[
         "Accept-Encoding": "gzip"
     }
     
-    # Get current date and date 180 days ahead
     today = datetime.now()
-    end_date = today + timedelta(days=180)
+    end_date = today - timedelta(days=30)
     
     params = {
-        "filter": f"moment>={today.strftime('%Y-%m-%d')} 00:00:00",
-        #"filter": f"moment>={today.strftime('%Y-%m-%d')} 00:00:00;moment<={end_date.strftime('%Y-%m-%d')} 23:59:59",
-        "limit": 1000,
-        "expand": "positions,salesChannel,state"
+        "filter": f"moment<={today.strftime('%Y-%m-%d')} 00:00:00;moment>={end_date.strftime('%Y-%m-%d')} 23:59:59",
+        "limit": 100,  # Используем limit=100 для работы expand
+        "expand": "positions,positions.assortment,positions.assortment.components,state,salesChannel"
     }
     
-    # Fetch and process orders
     offset = 0
     while True:
         params['offset'] = offset
@@ -532,206 +520,240 @@ def fetch_orders_by_channels(access_token: str, status_channels: Dict[str, List[
             
             if not orders:
                 break
+            
+            # Собираем все уникальные href'ы товаров из заказов
+            product_hrefs = set()
+            for order in orders:
+                for position in order.get("positions", {}).get("rows", []):
+                    assortment = position.get("assortment", {})
+                    if assortment.get("meta", {}).get("type") == "product":
+                        product_href = clean_href(assortment.get("meta", {}).get("href"))
+                        product_hrefs.add(product_href)  # Очищаем href перед добавлением
+                    elif assortment.get("meta", {}).get("type") == "bundle":
+                        for component in assortment.get("components", {}).get("rows", []):
+                            component_href = clean_href(component.get("assortment", {}).get("meta", {}).get("href"))
+                            product_hrefs.add(component_href)  # Очищаем href перед добавлением
+            # Получаем себестоимость всех товаров одним запросом
+            costs_cache = get_products_stock_costs(list(product_hrefs), access_token)
                 
             for order in orders:
-                # Get order date
                 order_date = datetime.fromisoformat(order.get('moment', '').replace('Z', '+00:00'))
                 order_date_str = order_date.strftime("%d.%m.%Y")
                 
-                # Get state name
-                state_meta = order.get('state', {}).get('meta', {})
-                state_href = state_meta.get('href')
-                
-                if state_href and state_href not in state_cache:
-                    state_response = requests.get(state_href, headers=headers)
-                    state_response.raise_for_status()
-                    state_data = state_response.json()
-                    state_cache[state_href] = state_data.get('name', '')
-                
-                state_name = state_cache.get(state_href, '')
-                print(state_name)
+                state_name = order.get('state', {}).get('name', '')
                 sheet_state_name = f"({state_name})"
                 
-                # Get channel name
-                channel_meta = order.get('salesChannel', {}).get('meta', {})
-                channel_href = channel_meta.get('href')
+                channel_name = order.get('salesChannel', {}).get('name', '')
                 
-                if channel_href and channel_href not in channel_cache:
-                    channel_response = requests.get(channel_href, headers=headers)
-                    channel_response.raise_for_status()
-                    channel_data = channel_response.json()
-                    channel_cache[channel_href] = channel_data.get('name', '')
-                
-                channel_name = channel_cache.get(channel_href, '')
-                
-                print(f"\nProcessing order - State: {sheet_state_name}, Channel: {channel_name}")
-                
-                # Специальная обработка для отмененных и возвратных заказов
                 if sheet_state_name in ["(Отменен)", "(Возврат)"]:
                     combined_state = "(Отменен, возврат)"
                     if combined_state in report and channel_name in report[combined_state]:
-                        # Обработка позиций заказа
-                        order_total = calculate_order_total(order, headers, product_cache)
+                        order_total = int(calculate_order_totals(order, costs_cache))
                         
-                        # Обновляем значения с учетом даты
                         if order_total > 0:
                             report[sheet_state_name][channel_name][order_date_str] = \
                                 report[sheet_state_name][channel_name].get(order_date_str, 0.0) + order_total
                             
-                            # Обновляем общую сумму для объединенного статуса
                             report[combined_state][channel_name][order_date_str] = \
                                 (report["(Отменен)"][channel_name].get(order_date_str, 0.0) + 
                                  report["(Возврат)"][channel_name].get(order_date_str, 0.0))
                 else:
-                    # Обычная обработка для других статусов
                     if sheet_state_name in report and channel_name in report[sheet_state_name]:
-                        order_total = calculate_order_total(order, headers, product_cache)
+                        order_total = int(calculate_order_totals(order, costs_cache))
+                        print(f"order total - {order_total}")
                         
                         if order_total > 0:
                             report[sheet_state_name][channel_name][order_date_str] = \
                                 report[sheet_state_name][channel_name].get(order_date_str, 0.0) + order_total
-            
-            if len(orders) < params["limit"]:
-                break
-                
+                            
             offset += params["limit"]
             
         except requests.HTTPError as e:
             print_api_errors(e.response)
             raise e
     
-    # # Получаем остатки по категориям
-    # categories_costs = fetch_categories_costs(access_token)
-    
-    # # Добавляем информацию об остатках в отчет
-    # report["Остатки"] = categories_costs
-    
-    # Удаляем временные ключи
     if "(Отменен)" in report:
         del report["(Отменен)"]
     if "(Возврат)" in report:
         del report["(Возврат)"]
-    print("report: ",report)
+
+    current_date = datetime.now().strftime("%d.%m.%Y")
+    summarized_report = summarize_orders(report, current_date)
+    print("summarized_report")
+    print(summarized_report)
 
     return report
 
-def get_product_stock_cost(product_href, headers):
+def clean_href(href: str) -> str:
+    """Очищает href от параметров запроса"""
+    return href.split('?')[0]
+
+def get_products_stock_costs(product_hrefs: List[str], access_token: str) -> Dict[str, float]:
     """
-    Запрашиваем отчёт об остатках (stock/all), фильтруя по href конкретного товара,
-    и возвращаем среднюю себестоимость.
+    Получает себестоимость для списка товаров батчами
     """
+    BATCH_SIZE = 100
     stock_url = "https://api.moysklad.ru/api/remap/1.2/report/stock/all"
-    params = {"filter": f"product={product_href}"}
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Accept-Encoding": "gzip"
+    }
     
-    response = requests.get(stock_url, headers=headers, params=params)
-    response.raise_for_status()
-    if response.status_code == 200:
-        data = response.json()
-        rows = data.get("rows", [])
-        if rows:
-            return rows[0].get("price", 0.0)/100
-        else:
-            return 0.0
-    else:
-        print(f"Ошибка при получении отчёта об остатках: {response.text}")
-        return 0.0
-    
+    # Очищаем href'ы от параметров expand
+    clean_hrefs = [clean_href(href) for href in product_hrefs]
+    all_costs = {}
 
-def get_bundle_composition_cost(bundle_href, headers):
-    """
-    Для комплекта (bundle) получаем список товаров в составе и суммируем их себестоимость.
-    """
-    bundle_url = bundle_href 
-    response = requests.get(bundle_url, headers=headers)
-    response.raise_for_status()
+    valid_hrefs = []
+    for href in clean_hrefs:
+        if "product" in href or "bundle" in href:
+            valid_hrefs.append(href)
     
-    if response.status_code == 200:
-        data = response.json()
-        # Состав комплекта хранится в массиве components (или аналогичном):
-        components = data.get("components", {})
-        total_cost = 0.0
-        comp_meta = components.get("meta", {})
-        comp_href = comp_meta.get("href")
-        comp_response = requests.get(comp_href, headers=headers)
-        comp_response.raise_for_status()
-        comp_data = comp_response.json()
-        comp_rows = comp_data.get("rows", [])
-        for row in comp_rows:
-            quantity = row.get("quantity", 1)
-            product_href = row.get("assortment", {}).get("meta", {}).get("href")
-            cost_for_item = get_product_stock_cost(product_href, headers) * quantity
-            total_cost += cost_for_item
-        return total_cost
-    else:
-        print(f"Ошибка при получении данных о комплекте: {response.text}")
-        return 0.0
-    
+    for i in range(0, len(valid_hrefs), BATCH_SIZE):
+        batch = valid_hrefs[i:i + BATCH_SIZE]
+        products_filter = ";".join(f"product={href}" for href in batch)
+        
+        try:
+            response = requests.get(stock_url, headers=headers, params={"filter": products_filter})
+            response.raise_for_status()
+            if response.status_code == 200:
+                data = response.json()
+                batch_costs = {
+                    clean_href(row.get("meta", {}).get("href", "")): row.get("price", 0.0) / 100
+                    for row in data.get("rows", [])
+                }
+                all_costs.update(batch_costs)
+        except requests.RequestException as e:
+            raise e
+        
+    return all_costs
 
-def calculate_order_total(order, headers, product_cache):
+def calculate_order_totals(order, costs_cache: Dict[str, float]):
+    """
+    Calculate order total using costs cache
+    """
+    order_total = 0.0
+    positions = order.get("positions", {}).get("rows", [])
+    
+    for position in positions:    
+        assortment = position.get("assortment", {})
+        assortment_type = assortment.get("meta", {}).get("type")
+        quantity = position.get("quantity", 0)
+        
+        if assortment_type == "product":
+            product_href = assortment.get("meta", {}).get("href")
+            buy_price = costs_cache.get(product_href, 0.0)
+            order_total += buy_price * quantity
+            print(f"product cost = {order_total}")
+                
+        elif assortment_type == "bundle":
+            components = assortment.get("components", {}).get("rows", [])
+            bundle_cost = 0.0
+            
+            for component in components:
+                comp_quantity = component.get("quantity", 1)
+                product_href = component.get("assortment", {}).get("meta", {}).get("href")
+                buy_price = costs_cache.get(product_href, 0.0)
+                bundle_cost += buy_price * comp_quantity
+            
+            order_total += bundle_cost * quantity
+            
+    return order_total
+
+def summarize_orders(report: Dict[str, Dict[str, Dict[str, float]]], current_date: str) -> Dict[str, Dict[str, Dict[str, float]]]:
+    """
+    Summarizes the order prices for each channel and status over the last three months for each date in the last 30 days.
+    
+    Args:
+        report: The original report containing order prices.
+        current_date: The current date in the format "dd.mm.yyyy".
+    
+    Returns:
+        A new report with summed prices for each channel and status for each date in the last 30 days.
+    """
+    # Convert current_date to a datetime object
+    current_date_obj = datetime.strptime(current_date, "%d.%m.%Y")
+    thirty_days_ago = current_date_obj - timedelta(days=30)
+
+    # Initialize a new report for summarized data
+    summarized_report = {}
+
+    # Iterate through each date in the last 30 days
+    for i in range(30):
+        date_to_check = current_date_obj - timedelta(days=i)
+        date_str = date_to_check.strftime("%d.%m.%Y")
+        three_months_ago = date_to_check - timedelta(days=90)
+
+        # Initialize the report for this specific date
+        summarized_report[date_str] = {}
+
+        for status, channels in report.items():
+            for channel, date_amounts in channels.items():
+                # Initialize the channel and status in the summarized report
+                if status not in summarized_report[date_str]:
+                    summarized_report[date_str][status] = {}
+                if channel not in summarized_report[date_str][status]:
+                    summarized_report[date_str][status][channel] = 0.0
+
+                # Sum the amounts for the last three months up to the current date
+                for order_date_str, amount in date_amounts.items():
+                    order_date_obj = datetime.strptime(order_date_str, "%d.%m.%Y")
+                    if three_months_ago <= order_date_obj <= date_to_check:
+                        summarized_report[date_str][status][channel] += amount
+
+    return summarized_report
+
+def calculate_order_total(order, access_token: str):
     """
     Calculate order total considering both products and bundles
     """
     order_total = 0.0
+    positions = order.get("positions", {}).get("rows", [])
     
-    # Check if positions is a dict or string
-    positions = order.get("positions", {})
-    positions_meta = positions.get("meta", {})
-    positions_href = positions_meta.get("href")
-    
-    try:
-        positions_response = requests.get(positions_href, headers=headers)
-        positions_response.raise_for_status()
-        positions = positions_response.json().get("rows", [])
+    for position in positions:    
+        assortment = position.get("assortment", {})
+        assortment_type = assortment.get("meta", {}).get("type")
+        quantity = position.get("quantity", 0)
         
-        for position in positions:    
-            assortment = position.get("assortment", {})
+        if assortment_type == "product":
+            product_href = assortment.get("meta", {}).get("href")
+            buy_price = get_product_stock_cost(product_href, access_token)
+            order_total += buy_price * quantity
                 
-            assortment_meta = assortment.get("meta", {})
-                
-            assortment_type = assortment_meta.get("type")
-            assortment_href = assortment_meta.get("href")
+        elif assortment_type == "bundle":
+            components = assortment.get("components", {}).get("rows", [])
+            bundle_cost = 0.0
             
-            quantity = position.get("quantity", 0)
+            for component in components:
+                comp_quantity = component.get("quantity", 1)
+                product_href = component.get("assortment", {}).get("meta", {}).get("href")
+                buy_price = get_product_stock_cost(product_href, access_token)
+                bundle_cost += buy_price * comp_quantity
             
-            if assortment_type == "product":
-                # Handle regular product
-                if assortment_href not in product_cache:
-                    try:
-                        product_response = requests.get(assortment_href, headers=headers)
-                        product_response.raise_for_status()
-                        product_data = product_response.json()
-                        if isinstance(product_data, dict):
-                            product_cache[assortment_href] = product_data
-                    except Exception as e:
-                        print(f"Error fetching product data: {e}")
-                        continue
-                
-                buy_price = get_product_stock_cost(assortment_href, headers)
-                order_total += buy_price *quantity
-                    
-            elif assortment_type == "bundle":
+            order_total += bundle_cost * quantity
 
-                if assortment_href not in product_cache:
-                    try:
-                        product_response = requests.get(assortment_href, headers=headers)
-                        product_response.raise_for_status()
-                        product_data = product_response.json()
-                        if isinstance(product_data, dict):
-                            product_cache[assortment_href] = product_data
-                    except Exception as e:
-                        print(f"Error fetching product data: {e}")
-                        continue
-
-                # Handle bundle
-                bundle_cost = get_bundle_composition_cost(assortment_href, headers)
-                order_total += bundle_cost * quantity
-                
-    except Exception as e:
-        print(f"Error processing positions: {e}")
-        return order_total
-
-    print("order total: ", order_total)
     return order_total
+
+def get_product_stock_cost(product_href, access_token: str):
+
+    stock_url = "https://api.moysklad.ru/api/remap/1.2/report/stock/all"
+    params = {"filter": f"product={product_href}"}
+    
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Accept-Encoding": "gzip"
+    }
+    try:
+        response = requests.get(stock_url, headers=headers, params=params)
+        response.raise_for_status()
+        if response.status_code == 200:
+            data = response.json()
+            rows = data.get("rows", [])
+            if rows:
+                return rows[0].get("price", 0.0)/100
+    except requests.RequestException:
+        pass
+
+    return 0.0
 
 def fetch_categories_costs(access_token: str) -> Dict[str, float]:
     china_transit_url = fetch_url_stock_CHINA_in_transit(access_token)
@@ -886,3 +908,73 @@ def fetch_stock_CHINA_in_transit(access_token: str) -> Dict[str, int]:
 
 
     return category_totals
+
+def calculate_costs_by_status_and_channel(access_token: str, status_channels: Dict[str, List[str]]) -> Dict[str, Dict[str, Dict[str, float]]]:
+    """
+    Calculates the total cost of ordered products over the last three months, grouped by status and sales channel.
+
+    Args:
+        access_token (str): Access token for authentication.
+        status_channels (Dict[str, List[str]]): Dictionary mapping statuses to lists of sales channels.
+
+    Returns:
+        Dict[str, Dict[str, Dict[str, float]]]: Total costs grouped by status and sales channel.
+    """
+    # Инициализация отчета
+    report = {}
+    for status, channels in status_channels.items():
+        report[status] = {channel: {} for channel in channels}
+
+    today = datetime.now()
+    end_date = today - timedelta(days=90)  # 3 months ago
+
+    # Подготовка API запроса
+    url = "https://api.moysklad.ru/api/remap/1.2/entity/customerorder"
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Accept-Encoding": "gzip"
+    }
+
+    params = {
+        "filter": f"moment<={today.strftime('%Y-%m-%d')} 23:59:59;moment>={end_date.strftime('%Y-%m-%d')} 00:00:00",
+        "limit": 100,
+        "expand": "positions,positions.assortment,positions.assortment.components,state,salesChannel"
+    }
+
+    offset = 0
+    while True:
+        params['offset'] = offset
+        try:
+            response = requests.get(url, headers=headers, params=params)
+            response.raise_for_status()
+            orders = response.json().get("rows", [])
+
+            if not orders:
+                break
+
+            for order in orders:
+                state_name = order.get('state', {}).get('name', '')
+                channel_name = order.get('salesChannel', {}).get('name', 'Неизвестный канал')
+
+                # Проверяем, есть ли статус и канал в report
+                if state_name in report and channel_name in report[state_name]:
+                    order_total = calculate_order_totals(order, get_products_stock_costs(
+                        [clean_href(position.get("assortment", {}).get("meta", {}).get("href")) for position in order.get("positions", {}).get("rows", [])],
+                        access_token
+                    ))
+
+                    # Убедимся, что order_total является числом
+                    if isinstance(order_total, (int, float)):
+                        if 'total' not in report[state_name][channel_name]:
+                            report[state_name][channel_name]['total'] = 0.0
+                        report[state_name][channel_name]['total'] += order_total
+
+            offset += params["limit"]
+
+        except requests.HTTPError as e:
+            print_api_errors(e.response)
+            raise e
+
+    return report
+
+

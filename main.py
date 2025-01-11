@@ -4,4 +4,4 @@ def main():
     process_all_sheets()
 
 if __name__ == "__main__":
-    main() 
+    main()
