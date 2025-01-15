@@ -74,69 +74,149 @@ def update_product_details_in_sheet(worksheet, products: Dict[str, Dict], start_
     if cells_to_update:
         worksheet.update_cells(cells_to_update)
 
+def shift_data_left_and_add_new_values(row_data, orders_data, product_idx):
+    """Сдвигает данные влево и добавляет новые значения"""
+    row_data = row_data[2:] + [
+        str(int(orders_data[product_idx].get('stock', 0))),
+        str(int(orders_data[product_idx].get('orders_count', 0)))
+    ]
+    return row_data
+
 def update_daily_stats_in_sheet(worksheet, orders_data: List[Dict], max_days: int = 90):
-    """
-    Обновляет статистику по остаткам и заказам в формате скользящего окна.
-    
-    Args:
-        worksheet: Рабочий лист Google Sheets
-        orders_data: Список словарей с данными о заказах и остатках
-        max_days: Максимальное количество дней для хранения (по умолчанию 90)
-    """
-    # Получаем текущую дату в нужном формате
-    current_date = datetime.now().strftime("%d.%m.%y")
-    
-    # Находим начальную колонку для статистики (E - остаток, F - дата)
-    stats_start_col = 5  # Колонка E
-    
-    # Получаем все существующие данные
+    # Получаем все данные с листа
     all_data = worksheet.get_all_values()
-    header_row = all_data[4]  # Строка с заголовками (индекс 4 = строка 5)
+    header_row = all_data[4]
+
+    print("Анализ заголовков:")
+    date_col_map = {}
     
-    # Получаем заголовки дат (каждый второй столбец начиная с F)
-    dates = header_row[stats_start_col+1::2]
-    dates = [d for d in dates if d.strip()]
-    
-    # Если текущей даты нет в заголовках
-    if current_date not in dates:
-        updates = []  # список обновлений для batch-запроса
-        
-        # Обрабатываем заголовки
-        headers_update = header_row[stats_start_col-1:]  # Получаем все заголовки начиная с E
-        if dates:  # Если есть существующие даты
-            # Закомментированная часть со сдвигом заголовков
-            headers_update = headers_update[2:] + ['Ост', current_date]
+    # Перебираем все столбцы начиная с F (индекс 5)
+    for col_idx in range(5, 184, 2):  # шаг 2, так как даты через столбец
+        if col_idx >= len(header_row):
+            break
             
-            # Обрабатываем данные для каждой строки
-            for row_idx, row in enumerate(all_data[5:], start=6):  # Начинаем с 6-й строки
-                row_data = row[stats_start_col-1:]  # Получаем данные начиная с колонки E
-                # Сдвигаем данные влево и добавляем новые значения
-                product_idx = row_idx - 6
-                if product_idx < len(orders_data):
-                    row_data = row_data[2:] + [
-                        str(int(orders_data[product_idx].get('stock', 0))),
-                        str(int(orders_data[product_idx].get('orders_count', 0)))
-                    ]
-                else:
-                    row_data = row_data[2:] + ['', '']
-                
-                # Добавляем обновление для этой строки
-                range_name = f'{get_column_letter(stats_start_col)}{row_idx}:{get_column_letter(stats_start_col + len(row_data) - 1)}{row_idx}'
+        date_str = header_row[col_idx].strip()
+        if date_str:
+            try:
+                print(f"Обработка даты из заголовка: {date_str}")
+                header_date = datetime.strptime(date_str, "%d.%m.%Y")
+                date_str_iso = header_date.strftime("%Y-%m-%d")
+                # Сохраняем и колонку с датой, и колонку для остатка (на 1 левее)
+                date_col_map[date_str_iso] = {
+                    'orders_col': col_idx + 1,
+                    'stock_col': col_idx
+                }
+                print(f"Добавлена дата: {date_str_iso} -> столбцы {get_column_letter(col_idx)} (остаток) и {get_column_letter(col_idx + 1)} (заказы)")
+            except ValueError as e:
+                print(f"Ошибка при обработке даты {date_str}: {e}")
+                continue
+
+    print(f"\nНайдено {len(date_col_map)} дат в заголовках:")
+    for date, cols in sorted(date_col_map.items()):
+        print(f"Дата: {date}, Столбец остатков: {get_column_letter(cols['stock_col'])}, Столбец заказов: {get_column_letter(cols['orders_col'])}")
+
+    product_map = {item['code']: item for item in orders_data}
+    updates = []
+
+    # Перебираем строки с продуктами начиная с 6-й
+    for row_idx in range(5, len(all_data)):
+        row_values = all_data[row_idx]
+        product_code = row_values[0].strip()
+
+        if not product_code or product_code not in product_map:
+            continue
+
+        order_info = product_map[product_code]
+        print(f"\nОбработка товара {product_code}")
+
+        orders_by_date = order_info.get("orders_by_date", {})
+        stock_by_date = order_info.get("stock_by_date", {})
+        
+        print(f"Найдено {len(orders_by_date)} дат заказов для товара")
+        matches = 0
+        
+        for date_str, cols in date_col_map.items():
+            # Обновляем количество заказов
+            if date_str in orders_by_date:
+                quantity = orders_by_date[date_str]
+                order_cell = f'{get_column_letter(cols["orders_col"])}{row_idx+1}'
                 updates.append({
-                    'range': range_name,
-                    'values': [row_data]
+                    'range': order_cell,
+                    'values': [[int(quantity)]]
                 })
-        
-        # Закомментированное обновление заголовков
-        header_range = f'{get_column_letter(stats_start_col)}5:{get_column_letter(stats_start_col + len(headers_update) - 1)}5'
-        updates.insert(0, {
-            'range': header_range,
-            'values': [headers_update]
-        })
-        
-        # Выполняем batch-обновление
-        if updates:
-            worksheet.batch_update(updates)
+                matches += 1
+
+            # Обновляем остаток
+            if date_str in stock_by_date:
+                stock = stock_by_date[date_str]
+                stock_cell = f'{get_column_letter(cols["stock_col"])}{row_idx+1}'
+                updates.append({
+                    'range': stock_cell,
+                    'values': [[int(stock)]]
+                })
+
+        print(f"Найдено совпадений дат: {matches} из {len(orders_by_date)}")
+
+    print(f"\nВсего подготовлено обновлений: {len(updates)}")
+    
+    if updates:
+        worksheet.batch_update(updates)
+        print("Обновление выполнено успешно")
+    else:
+        print("Нет данных для обновления")
+
+
+def update_daily_stats_sliding_window(worksheet):
+    # Получаем все данные с листа
+    all_data = worksheet.get_all_values()
+    header_row = all_data[4]
+    
+    print("Начало обработки sliding windows...")
+    
+    # Находим последнюю дату в заголовках (крайний правый столбец с датой)
+    last_date_str = header_row[-1].strip()
+    last_date = datetime.strptime(last_date_str, "%d.%m.%Y")
+    
+    # Вычисляем новую дату (следующий день)
+    new_date = last_date + timedelta(days=1)
+    new_date_str = new_date.strftime("%d.%m.%Y")
+    
+    print(f"Последняя дата: {last_date.strftime('%d.%m.%Y')}")
+    print(f"Новая дата: {new_date_str}")
+    
+    # Формируем обновления для сдвига данных
+    updates = []
+    
+    # Перебираем все строки начиная с 5-й (где данные)
+    for row_idx, row in enumerate(all_data[4:], start=5):
+        # Сдвигаем данные влево, начиная с колонки E (индекс 4)
+        for col_idx in range(4, len(row)-2):  # -2 чтобы оставить место для новых столбцов
+            cell_value = row[col_idx+2]  # Берем значение из столбца справа
+            updates.append({
+                'range': f'{get_column_letter(col_idx+1)}{row_idx}',
+                'values': [[cell_value]]
+            })
+    
+    # Добавляем новые столбцы справа
+    last_col = len(header_row) - 1
+    
+    # Обновляем заголовки для новых столбцов
+    updates.append({
+        'range': f'{get_column_letter(last_col)}{5}',
+        'values': [['Ост.']]
+    })
+    updates.append({
+        'range': f'{get_column_letter(last_col+1)}{5}',
+        'values': [[new_date_str]]
+    })
+    
+    # Выполняем все обновления одним запросом
+    if updates:
+        worksheet.batch_update(updates)
+        print("Обновление sliding windows выполнено успешно")
+
+
+
 
 def get_product_codes_from_sheet2(worksheet) -> List[str]:
     """Gets product codes from Sheet2 starting from C4"""

@@ -1,5 +1,5 @@
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytz
 import schedule
@@ -11,12 +11,13 @@ from services.google_sheets_handler import (
     update_product_details_in_sheet2, update_daily_stats_in_sheet2,
     update_sheet3, get_supply_dates_from_sheet3, update_supply_quantities_in_sheet3,
     get_sales_channels_and_statuses, update_sales_report_in_sheet5, update_categories_costs_in_sheet5,
-    update_transits_costs_in_sheet5, update_daily_stats_in_sheet5_sliding_window, sheet3_sliding_window
+    update_transits_costs_in_sheet5, update_daily_stats_in_sheet5_sliding_window, sheet3_sliding_window,
+    update_daily_stats_sliding_window
 )
 from services.moysklad_api import (
     fetch_product_details_by_codes, fetch_customer_orders_for_products,
     fetch_supplies_by_date_range, fetch_orders_by_channels, fetch_categories_costs, fetch_stock_CHINA_in_transit,
-    fetch_url_stock_CHINA_in_transit, fetch_product_stock, calculate_costs_by_status_and_channel
+    fetch_url_stock_CHINA_in_transit, fetch_product_stock, calculate_costs_by_status_and_channel, fetch_product_stock2
 )
 from utils.date_handler import get_current_day_date_range
 import gspread
@@ -41,6 +42,8 @@ def process_sheet1(spreadsheet, token):
     start_date, end_date = get_current_day_date_range()
     orders_data = fetch_customer_orders_for_products(token, start_date, end_date, products)
     print(f"Processed orders for {len(orders_data)} products")
+
+    update_daily_stats_sliding_window(worksheet1)
 
     update_daily_stats_in_sheet(worksheet1, orders_data)
     print("Daily statistics updated in Sheet1")
@@ -94,7 +97,8 @@ def process_sheet3(spreadsheet, token):
 
         # Fetch product stock quantities
         product_codes = [row[0] for row in worksheet3.get_all_values()[3:] if row[0].strip()]
-        stock_quantities = fetch_product_stock(token, product_codes)
+        print(product_codes)
+        stock_quantities = fetch_product_stock2(token, product_codes)
 
         # Update stock quantities in column D
         cells_to_update = []
@@ -147,10 +151,10 @@ def schedule_process_sheets(spreadsheet, token):
 
     # Schedule the tasks
     schedule.every().day.at("00:10").do(process_sheet1, spreadsheet, token)
-    schedule.every().day.at("00:13").do(process_sheet2, spreadsheet, token)
-    schedule.every().day.at("00:16").do(update_sheet3_products)
-    schedule.every().day.at("00:20").do(process_sheet3, spreadsheet, token)
-    schedule.every().day.at("23:50").do(process_sheet5, spreadsheet, token)
+    schedule.every().day.at("00:18").do(process_sheet2, spreadsheet, token)
+    schedule.every().day.at("00:20").do(update_sheet3_products)
+    schedule.every().day.at("00:25").do(process_sheet3, spreadsheet, token)
+    #schedule.every().day.at("23:50").do(process_sheet5, spreadsheet, token)
 
     while True:
         schedule.run_pending()
@@ -170,7 +174,7 @@ def process_all_sheets():
         process_sheet1(spreadsheet, token)
 
         # Process Sheet2
-        process_sheet2(spreadsheet, token)
+        #process_sheet2(spreadsheet, token)
 
         #Обработка данных для Листа3
         try:
@@ -192,14 +196,14 @@ def process_all_sheets():
         # Process Sheet3
         process_sheet3(spreadsheet, token)
 
-        #Process Sheet5
-        try:
-            worksheet5 = spreadsheet.worksheet("Лист5")
-        except gspread.WorksheetNotFound:
-            worksheet5 = spreadsheet.add_worksheet(title="Лист5", rows="1000", cols="20")
-            print("Лист5 создан.")
+        # #Process Sheet5
+        # try:
+        #     worksheet5 = spreadsheet.worksheet("Лист5")
+        # except gspread.WorksheetNotFound:
+        #     worksheet5 = spreadsheet.add_worksheet(title="Лист5", rows="1000", cols="20")
+        #     print("Лист5 создан.")
 
-        process_sheet5(worksheet5, token)
+        # process_sheet5(worksheet5, token)
 
         # Schedule the tasks
         schedule_process_sheets(spreadsheet, token)

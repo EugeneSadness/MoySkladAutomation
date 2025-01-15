@@ -1,5 +1,5 @@
 from typing import List, Dict
-import requests
+import requests, time
 from datetime import datetime, timedelta
 
 from utils.error_handler import print_api_errors
@@ -27,6 +27,8 @@ def fetch_products_by_codes(access_token: str, product_codes: List[str]) -> List
             raise e
     
     return products
+
+
 
 def fetch_product_details_by_codes(access_token: str, product_codes: List[str], existing_products: Dict[str, Dict]) -> Dict[str, Dict]:
     """
@@ -105,23 +107,35 @@ def fetch_product_details_by_codes(access_token: str, product_codes: List[str], 
     return products_dict
 
 def fetch_customer_orders_for_products(access_token: str, start_date: str, end_date: str, products: Dict[str, Dict]) -> List[Dict]:
-    
     url = "https://api.moysklad.ru/api/remap/1.2/entity/customerorder"
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Accept-Encoding": "gzip"
     }
-    
     params = {
-        "filter": f"moment>={start_date};moment<={end_date}",
-        "limit": 1000,
-        "expand": "positions"
+        "filter": f"moment<={start_date};moment>={end_date}",
+        "limit": 100,
+        "expand": "positions,positions.assortment"
     }
+
+    print(f"products - {products}")
     
-    product_stats = {code: {"count": 0} | details for code, details in products.items()}
+    # Инициализируем структуру данных для каждого продукта
+    product_stats = {}
+    for code, details in products.items():
+        product_stats[code] = {
+            "orders_by_date": {},
+            "stock_by_date": {},
+            "name": details.get("name", ""),
+            "category": details.get("category", ""),
+            "description": details.get("description", "")
+        }
+
     product_cache = {}
-    
+    product_hrefs = []
     offset = 0
+
+    # Собираем данные о заказах
     while True:
         params['offset'] = offset
         try:
@@ -131,57 +145,146 @@ def fetch_customer_orders_for_products(access_token: str, start_date: str, end_d
             
             if not orders:
                 break
-            
+
             for order in orders:
+                order_date = order.get("moment", "").split(" ")[0]
+                print(f"order date is {order_date}")
+                
                 positions = order.get("positions", {})
-                positions_href = positions.get("meta", {}).get("href")
-                positions_response = requests.get(positions_href, headers=headers)
-                positions_response.raise_for_status()
-                positions_data = positions_response.json()
-                positions_rows = positions_data.get("rows", [])
+                positions_rows = positions.get("rows", [])
 
                 for position in positions_rows:
                     assortment = position.get("assortment", {})
-                    product_href = assortment.get("meta", {}).get("href")
-                    
+                    product_href = assortment.get("meta", {}).get("href").split('?')[0]
+                    print(f"product href - {product_href}")
+
                     if product_href not in product_cache:
-                        product_response = requests.get(product_href, headers=headers)
-                        product_response.raise_for_status()
-                        product_data = product_response.json()
-                        product_cache[product_href] = product_data.get("code")
-                    
+                        product_cache[product_href] = assortment.get("code")
+                        
+
                     product_code = product_cache[product_href]
-                    
+                    print(f"product code is {product_code}")
+
                     if product_code in product_stats:
                         quantity = float(position.get("quantity", 0))
-                        product_stats[product_code]["count"] += quantity
-        
+                        product_hrefs.append(product_href)
+                        if order_date not in product_stats[product_code]["orders_by_date"]:
+                            product_stats[product_code]["orders_by_date"][order_date] = 0
+                        product_stats[product_code]["orders_by_date"][order_date] += quantity
+                        print(f"Updated {product_code} for date {order_date}: {product_stats[product_code]['orders_by_date'][order_date]}")
+
         except requests.HTTPError as e:
             print_api_errors(e.response)
             raise e
-        
+
         offset += len(orders)
         if len(orders) < 100:
             break
+
+    # Получаем остатки по датам для всех товаров
+    stocks_by_date = fetch_product_stock(access_token, list(set(product_hrefs)), list(product_stats.keys()))
     
+    # Обновляем статистику остатков для каждого товара
+    for code in product_stats:
+        if code in stocks_by_date:
+            product_stats[code]["stock_by_date"] = stocks_by_date[code]
+            # Устанавливаем текущий остаток как последний известный остаток
+            latest_stock = next(iter(sorted(stocks_by_date[code].items(), reverse=True)), (None, 0))[1]
+            product_stats[code]["stock"] = latest_stock
+
+    # Формируем результат
     result = []
-    stocks = fetch_product_stock(access_token, list(product_stats.keys()))
-    
     for code, stats in product_stats.items():
         result.append({
             "code": code,
-            "name": stats.get("name", ""),
-            "category": stats.get("category", ""),
-            "description": stats.get("description", ""),
-            "orders_count": int(stats["count"]),
-            "stock": stocks.get(code, 0)
+            "name": stats["name"],
+            "category": stats["category"],
+            "description": stats["description"],
+            "orders_by_date": stats["orders_by_date"],
+            "stock": stats["stock"],
+            "stock_by_date": stats["stock_by_date"]
         })
-        print(result)
-    
-    return result 
 
-def fetch_product_stock(access_token: str, product_codes: List[str]) -> Dict[str, float]:
+    print(result)
+    return result
+
+
+def fetch_product_stock(access_token: str, product_hrefs: List[str], product_codes: List[str]) -> Dict[str, Dict[str, float]]:
+    """
+    Получает физические остатки для списка товаров за последние 90 дней.
+    Args:
+        access_token (str): Токен доступа
+        product_hrefs (List[str]): Список href'ов товаров
+        product_codes (List[str]): Список кодов товаров
+    Returns:
+        Dict[str, Dict[str, float]]: Словарь {код товара: {дата: остаток}}
+    """
+    BATCH_SIZE = 50  # Уменьшаем размер batch для безопасности (учитывая ограничение в 100)
+    url = "https://api.moysklad.ru/api/remap/1.2/report/stock/all"
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Accept-Encoding": "gzip"
+    }
+    
     china_transit_url = fetch_url_stock_CHINA_in_transit(access_token)
+    stock_dict = {code: {} for code in product_codes}
+    current_date = datetime.now()
+
+    # Разбиваем список href'ов на батчи
+    for i in range(0, len(product_hrefs), BATCH_SIZE):
+        batch_hrefs = product_hrefs[i:i + BATCH_SIZE]
+        products_filter = ";".join(f"product={href}" for href in batch_hrefs)
+
+        # Проходим по датам
+        for day_offset in range(90):
+            date_to_check = (current_date - timedelta(days=day_offset)).strftime("%Y-%m-%d")
+            
+            # Формируем фильтр
+            filter_parts = [
+                f"store!={china_transit_url}",
+                products_filter,
+                f"moment={date_to_check}"
+            ]
+            
+            params = {
+                "filter": ";".join(filter_parts),
+                "limit": 1000
+            }
+
+            # Пагинация
+            offset = 0
+            while True:
+                params['offset'] = offset
+                try:
+                    response = requests.get(url, headers=headers, params=params)
+                    response.raise_for_status()
+                    data = response.json()
+                    rows = data.get("rows", [])
+
+                    if not rows:
+                        break
+
+                    for item in rows:
+                        code = item.get("code")
+                        if code in product_codes:
+                            stock_dict[code][date_to_check] = float(item.get("stock", 0))
+
+                    if len(rows) < params["limit"]:
+                        break
+
+                    offset += len(rows)
+
+                except requests.HTTPError as e:
+                    print_api_errors(e.response)
+                    raise e
+
+                # Добавляем небольшую задержку между запросами
+                time.sleep(0.1)
+
+    return stock_dict
+
+
+def fetch_product_stock2(access_token: str, product_codes: List[str]) -> Dict[str, float]:
     """
     Получает физические остатки для списка товаров.
     
@@ -197,39 +300,38 @@ def fetch_product_stock(access_token: str, product_codes: List[str]) -> Dict[str
         "Authorization": f"Bearer {access_token}",
         "Accept-Encoding": "gzip"
     }
-    
+
     params = {
-        "filter": f"store!={china_transit_url}",
-        "limit": 1000
-    }
+            "limit": 1000
+        }
     
     stock_dict = {}
     offset = 0
-    
+        
     while True:
         params['offset'] = offset
+        print("try")
         try:
             response = requests.get(url, headers=headers, params=params)
             response.raise_for_status()
             data = response.json()
             rows = data.get("rows", [])
-            
-            if not rows:
-                break
-            
-            for item in rows:
+            for item in data.get("rows", []):
                 code = item.get("code")
                 if code in product_codes:
                     stock_dict[code] = float(item.get("stock", 0))
-            
+                    
             if len(rows) < params["limit"]:
-                break
-                
+                    break
+                    
             offset += len(rows)
-                
+
         except requests.HTTPError as e:
             print_api_errors(e.response)
             raise e
+        
+        
+    print(stock_dict)
         
     return stock_dict 
 
