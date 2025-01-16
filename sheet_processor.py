@@ -43,7 +43,7 @@ def process_sheet1(spreadsheet, token):
     orders_data = fetch_customer_orders_for_products(token, start_date, end_date, products)
     print(f"Processed orders for {len(orders_data)} products")
 
-    update_daily_stats_sliding_window(worksheet1)
+    #update_daily_stats_sliding_window(worksheet1)
 
     update_daily_stats_in_sheet(worksheet1, orders_data)
     print("Daily statistics updated in Sheet1")
@@ -67,8 +67,8 @@ def process_sheet2(spreadsheet, token):
 def process_sheet3(spreadsheet, token):
     """Обрабатывает данные приемок для Листа3 для будущих дат"""
     try:
-        worksheet3 = spreadsheet.worksheet("Лист3")
-        sheet3_sliding_window(worksheet3)
+        worksheet3 = spreadsheet.worksheet("Лист6")
+        #sheet3_sliding_window(worksheet3)
         supply_dates = get_supply_dates_from_sheet3(worksheet3)
         if not supply_dates:
             print("Нет данных для обработки будущих приемок")
@@ -104,7 +104,14 @@ def process_sheet3(spreadsheet, token):
         cells_to_update = []
         for idx, code in enumerate(product_codes, start=4):
             stock_quantity = stock_quantities.get(code, 0)
-            cells_to_update.append(gspread.Cell(idx, 4, stock_quantity))  # Column D
+            cell = worksheet3.cell(idx, 4)
+            cell_value = cell.value if cell.value else ""  # Защита от None
+            
+            if cell_value.startswith('='):  # Если в ячейке формула
+                new_value = f"{cell_value}+{stock_quantity}"  # Добавляем +n к существующей формуле
+            else:
+                new_value = stock_quantity
+            cells_to_update.append(gspread.Cell(idx, 4, new_value))
 
         if cells_to_update:
             worksheet3.update_cells(cells_to_update)
@@ -143,7 +150,7 @@ def schedule_process_sheets(spreadsheet, token):
 
     def update_sheet3_products():
         """Вспомогательная функция для обновления Листа3"""
-        worksheet3 = spreadsheet.worksheet("Лист3")
+        worksheet3 = spreadsheet.worksheet("Лист6")
         product_codes = [row[0] for row in worksheet3.get_all_values()[3:] if row[0].strip()]
         products = fetch_product_details_by_codes(token, product_codes, {})
         update_sheet3(worksheet3, products)
@@ -151,7 +158,7 @@ def schedule_process_sheets(spreadsheet, token):
 
     # Schedule the tasks
     schedule.every().day.at("00:10").do(process_sheet1, spreadsheet, token)
-    schedule.every().day.at("00:18").do(process_sheet2, spreadsheet, token)
+    #schedule.every().day.at("00:18").do(process_sheet2, spreadsheet, token)
     schedule.every().day.at("00:20").do(update_sheet3_products)
     schedule.every().day.at("00:25").do(process_sheet3, spreadsheet, token)
     #schedule.every().day.at("23:50").do(process_sheet5, spreadsheet, token)
@@ -168,7 +175,7 @@ def process_all_sheets():
 
         # Get MoySklad token
         token = config.MOYSKLAD_TOKEN
-        print("Access Token:", token)
+        #print("Access Token:", token)
 
         #Process Sheet1
         process_sheet1(spreadsheet, token)
@@ -185,10 +192,10 @@ def process_all_sheets():
 
         # Get product codes directly from Sheet3
         product_codes = [row[0] for row in worksheet3.get_all_values()[3:] if row[0].strip()]
-        
+
         # Fetch product details from MoySklad
         products = fetch_product_details_by_codes(token, product_codes, {})
-        
+
         # Update Sheet3 with fetched product details
         update_sheet3(worksheet3, products)
         print("Данные успешно записаны в Лист3.")

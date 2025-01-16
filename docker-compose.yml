@@ -7,5 +7,5 @@ services:
     volumes:
       - .:/app
     environment:
-      - CREDENTIALS_PATH=/app/cred.json
+      - CREDENTIALS_PATH=/app/cred-bot.json
       - SHEET_NAME=test

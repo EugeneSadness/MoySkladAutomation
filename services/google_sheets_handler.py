@@ -443,52 +443,47 @@ def get_supply_dates_from_sheet3(worksheet) -> Dict[str, List[str]]:
     return product_supplies
 
 def sheet3_sliding_window(worksheet, num_dates: int = 180):
-    """
-    Сдвигает все колонки влево в Sheet5, удаляя крайнюю левую дату и добавляя новую дату справа.
-    Ближайшая дата всегда слева, дальняя справа.
-
-    Args:
-        worksheet: Рабочий лист Google Sheets
-        num_dates: Количество дат для отображения
-    """
-    # Получаем все значения
+    # Получаем все значения одним запросом
     all_data = worksheet.get_all_values()
     header_row = all_data[1]  # Вторая строка с датами (строка 2)
 
     # Находим даты в заголовке, начиная с колонки E (индекс 4)
     dates = []
     date_cols = []  # Индексы колонок с датами
-    for idx, cell in enumerate(header_row[4:], start=4):  # Начинаем с E колонки (индекс 4)
+    for idx, cell in enumerate(header_row[4:], start=4):
         if cell.strip() and not cell.startswith('#'):
             dates.append(cell)
             date_cols.append(idx)
 
     # Если есть даты для сдвига
     if dates:
-        # Получаем самую правую дату и преобразуем ее
         rightmost_date = datetime.strptime(dates[-1], "%d.%m.%Y")
-        # Добавляем один день к самой правой дате
         new_date = (rightmost_date + timedelta(days=1)).strftime("%d.%m.%Y")
 
         updates = []
+        
+        # Получаем все формулы одним запросом
+        formulas = worksheet.get('A1:ZZ', value_render_option='FORMULA')
 
-        # Для каждой строки
-        for row_idx, row in enumerate(all_data, start=1):
-            # Сохраняем первые 4 колонки (A-D)
-            new_row = row[:4]
-
-            if row_idx == 2:  # Для строки с датами (строка 2)
-                # Добавляем все существующие даты, кроме первой
-                new_row.extend([row[i] for i in date_cols[1:]])
-                # Добавляем новую дату в конец
+        for row_idx, (data_row, formula_row) in enumerate(zip(all_data, formulas), start=1):
+            if row_idx == 2:  # Строка с датами
+                new_row = data_row[:4]
+                new_row.extend([data_row[i] for i in date_cols[1:]])
                 new_row.append(new_date)
-            else:  # Для остальных строк
-                # Добавляем все значения, кроме первого
-                new_row.extend([row[i] for i in date_cols[1:]])
-                # Добавляем пустую ячейку в конец
-                new_row.append("")
+            else:
+                new_row = []
+                # Первые 4 колонки
+                for col_idx in range(4):
+                    cell_value = formula_row[col_idx] if col_idx < len(formula_row) else ""
+                    new_row.append(cell_value)
+                
+                # Значения для дат
+                for col_idx in date_cols[1:]:
+                    cell_value = formula_row[col_idx] if col_idx < len(formula_row) else ""
+                    new_row.append(cell_value)
+                
+                new_row.append("")  # Пустая ячейка в конце
 
-            # Добавляем обновление для этой строки
             range_name = f'A{row_idx}:{get_column_letter(len(new_row))}{row_idx}'
             updates.append({
                 'range': range_name,
@@ -533,7 +528,7 @@ def update_supply_quantities_in_sheet3(worksheet, supplies_data: Dict[str, Dict[
     # Обновляем количества
     value_updates = []
     format_updates = []
-    for row_idx, row in enumerate(all_values[3:], start=4):  # Начинаем с 4-й строки
+    for row_idx, row in enumerate(all_values[3:], start=4):
         product_code = row[0].strip()
         if product_code in supplies_data:
             product_dates = supplies_data[product_code]
@@ -542,27 +537,30 @@ def update_supply_quantities_in_sheet3(worksheet, supplies_data: Dict[str, Dict[
                     column_letter = date_to_column[date_str]
                     col_idx = ord(column_letter) - ord('A')
                     
-                    # Получаем текущее значение из ячейки
-                    current_value = row[col_idx] if col_idx < len(row) else "0"
-                    try:
-                        current_value = float(current_value) if current_value.strip() else 0
-                    except (ValueError, AttributeError):
-                        current_value = 0
+                    # Получаем текущее значение напрямую из ячейки
+                    cell = worksheet.cell(row_idx, col_idx + 1)  # +1 так как gspread использует индексацию с 1
+                    current_value = cell.value if cell.value else ""
                     
-                    # Добавляем новое значение к существующему
-                    new_value = current_value + quantity
+                    # Если есть формула, добавляем к ней новое значение
+                    if current_value.startswith('='):
+                        new_value = f"{current_value}+{quantity}"
+                    else:
+                        # Если текущее значение числовое или пустое
+                        try:
+                            current_num = float(current_value) if current_value.strip() else 0
+                            new_value = current_num + quantity
+                        except (ValueError, AttributeError):
+                            new_value = quantity
                     
-                    cell = f"{column_letter}{row_idx}"
+                    cell_addr = f"{column_letter}{row_idx}"
                     value_updates.append({
-                        'range': cell,
+                        'range': cell_addr,
                         'values': [[new_value]]
                     })
     
     # Применяем обновления батчем
     if value_updates:
         worksheet.batch_update(value_updates)
-        for format_update in format_updates:
-            worksheet.format(format_update['range'], format_update['format'])
         print(f"Обновлены данные о приемках для {len(value_updates)} ячеек")
 
 def get_sales_channels_and_statuses(worksheet) -> Dict[str, List[str]]:
