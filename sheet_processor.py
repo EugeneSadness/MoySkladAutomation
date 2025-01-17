@@ -192,24 +192,24 @@ def process_all_sheets():
         #process_sheet2(spreadsheet, token)
 
         #Обработка данных для Листа3
-        try:
-            worksheet3 = spreadsheet.worksheet("Лист6")
-        except gspread.WorksheetNotFound:
-            worksheet3 = spreadsheet.add_worksheet(title="Лист6", rows="1000", cols="3")
-            print("Лист3 создан.")
+        # try:
+        #     worksheet3 = spreadsheet.worksheet("Лист6")
+        # except gspread.WorksheetNotFound:
+        #     worksheet3 = spreadsheet.add_worksheet(title="Лист6", rows="1000", cols="3")
+        #     print("Лист3 создан.")
 
-        # Get product codes directly from Sheet3
-        product_codes = [row[0] for row in worksheet3.get_all_values()[3:] if row[0].strip()]
+        # # Get product codes directly from Sheet3
+        # product_codes = [row[0] for row in worksheet3.get_all_values()[3:] if row[0].strip()]
 
-        # Fetch product details from MoySklad
-        products = fetch_product_details_by_codes(token, product_codes, {})
+        # # Fetch product details from MoySklad
+        # products = fetch_product_details_by_codes(token, product_codes, {})
 
-        # Update Sheet3 with fetched product details
-        update_sheet3(worksheet3, products)
-        print("Данные успешно записаны в Лист3.")
+        # # Update Sheet3 with fetched product details
+        # update_sheet3(worksheet3, products)
+        # print("Данные успешно записаны в Лист3.")
 
-        # Process Sheet3
-        process_sheet3(spreadsheet, token)
+        # # Process Sheet3
+        # process_sheet3(spreadsheet, token)
 
         # #Process Sheet5
         # try:
