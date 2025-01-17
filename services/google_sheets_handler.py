@@ -326,6 +326,7 @@ def update_sheet3(worksheet, products: Dict[str, Dict], start_row: int = 3):
         
         # Определяем диапазон для обновления
         end_row = start_row + len(products)
+        print("end_row: ", end_row)
         range_name = f'A{start_row}:C{end_row}'
         
         # Обновляем данные в Лист3

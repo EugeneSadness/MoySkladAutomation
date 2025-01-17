@@ -69,61 +69,69 @@ def process_sheet3(spreadsheet, token):
     try:
         worksheet3 = spreadsheet.worksheet("Лист6")
         #sheet3_sliding_window(worksheet3)
-        supply_dates = get_supply_dates_from_sheet3(worksheet3)
-        if not supply_dates:
-            print("Нет данных для обработки будущих приемок")
-            return
-        current_date = datetime.now().strftime("%Y-%m-%d")
-        print(current_date)
-
-        # Fetch supplies
-        supplies = fetch_supplies_by_date_range(token, current_date)
-        supplies_quantities = {}
-        for supply in supplies:
-            try:
-                moment = supply['moment'].split('.')[0]
-                supply_date = datetime.strptime(moment, "%Y-%m-%d %H:%M:%S").strftime("%d.%m.%Y")
-                for position in supply['positions']:
-                    code = position['code']
-                    if code in supply_dates and supply_date in supply_dates[code]:
-                        if code not in supplies_quantities:
-                            supplies_quantities[code] = {}
-                        if supply_date not in supplies_quantities[code]:
-                            supplies_quantities[code][supply_date] = 0
-                        supplies_quantities[code][supply_date] += position['quantity']
-            except ValueError as e:
-                print(f"Ошибка обработки даты для приемки {supply.get('id')}: {e}")
-                continue
-
-        # Fetch product stock quantities
-        product_codes = [row[0] for row in worksheet3.get_all_values()[3:] if row[0].strip()]
-        print(product_codes)
+        # Get all worksheet data in one call
+        all_values = worksheet3.get_all_values()
+        
+        # Extract product codes from the data (starting from row 4)
+        product_codes = [row[0].strip() for row in all_values[3:] if row[0].strip()]
+        print(f"Found {len(product_codes)} product codes")
+        
+        # Get stock quantities in one API call
         stock_quantities = fetch_product_stock2(token, product_codes)
-
-        # Update stock quantities in column D
-        cells_to_update = []
+        
+        # Prepare batch updates for stock quantities
+        updates = []
         for idx, code in enumerate(product_codes, start=4):
             stock_quantity = stock_quantities.get(code, 0)
-            cell = worksheet3.cell(idx, 4)
-            cell_value = cell.value if cell.value else ""  # Защита от None
             
-            if cell_value.startswith('='):  # Если в ячейке формула
-                new_value = f"{cell_value}+{stock_quantity}"  # Добавляем +n к существующей формуле
+            # Get existing cell value from our cached all_values
+            current_value = all_values[idx-1][3] if len(all_values[idx-1]) > 3 else ""
+            
+            new_value = (f"{current_value}+{stock_quantity}" 
+                        if current_value.startswith('=') 
+                        else stock_quantity)
+            
+            updates.append({
+                'range': f'D{idx}',
+                'values': [[new_value]]
+            })
+        
+        # Perform single batch update
+        if updates:
+            worksheet3.batch_update(updates)
+            print(f"Updated stock quantities for {len(updates)} products")
+        
+        # Get and process supplies data
+        current_date = datetime.now().strftime("%Y-%m-%d")
+        supplies = fetch_supplies_by_date_range(token, current_date)
+        
+        if supplies:
+            supplies_quantities = {}
+            for supply in supplies:
+                try:
+                    moment = supply['moment'].split('.')[0]
+                    supply_date = datetime.strptime(moment, "%Y-%m-%d %H:%M:%S").strftime("%d.%m.%Y")
+                    
+                    for position in supply['positions']:
+                        code = position['code']
+                        if code in product_codes:
+                            supplies_quantities.setdefault(code, {})
+                            supplies_quantities[code][supply_date] = (
+                                supplies_quantities[code].get(supply_date, 0) + 
+                                position['quantity']
+                            )
+                except ValueError as e:
+                    print(f"Error processing date for supply {supply.get('id')}: {e}")
+                    continue
+            
+            if supplies_quantities:
+                update_supply_quantities_in_sheet3(worksheet3, supplies_quantities)
+                print(f"Updated future supplies data")
             else:
-                new_value = stock_quantity
-            cells_to_update.append(gspread.Cell(idx, 4, new_value))
-
-        if cells_to_update:
-            worksheet3.update_cells(cells_to_update)
-            print("Stock quantities updated in column D")
-
-        if supplies_quantities:
-            update_supply_quantities_in_sheet3(worksheet3, supplies_quantities)
-            print(f"Данные о будущих приемках обновлены в Лист3")
-        else:
-            print("Нет данных о будущих приемках")
+                print("No future supplies data to update")
+                
     except Exception as e:
-        print(f"Ошибка при обработке Лист3: {e}")
+        print(f"Error processing Sheet3: {str(e)}")
         raise
 
 def process_sheet5(worksheet, token):
@@ -175,19 +183,19 @@ def process_all_sheets():
 
         # Get MoySklad token
         token = config.MOYSKLAD_TOKEN
-        #print("Access Token:", token)
+        print("Access Token:", token)
 
         #Process Sheet1
-        process_sheet1(spreadsheet, token)
+        #process_sheet1(spreadsheet, token)
 
         # Process Sheet2
         #process_sheet2(spreadsheet, token)
 
         #Обработка данных для Листа3
         try:
-            worksheet3 = spreadsheet.worksheet("Лист3")
+            worksheet3 = spreadsheet.worksheet("Лист6")
         except gspread.WorksheetNotFound:
-            worksheet3 = spreadsheet.add_worksheet(title="Лист3", rows="1000", cols="3")
+            worksheet3 = spreadsheet.add_worksheet(title="Лист6", rows="1000", cols="3")
             print("Лист3 создан.")
 
         # Get product codes directly from Sheet3
